@@ -1,0 +1,23 @@
+reactive_node:
+  ros__parameters:
+    scan_topic: "/scan"
+    drive_topic: "/drive"
+    base_frame: "ego_racecar/base_link"
+    scan_frame: "ego_racecar/laser"
+
+    far_threshold: 9.0
+    near_threshold: 0.15
+    gap_threshold: 0.11
+    vehicle_width: 0.3
+    safety_gain: 0.7
+    wheel_base: 0.33
+    space_gain: 0.8
+    gap_maxrange_filter: 1.1
+    gap_leng_filter: 5  # int
+
+    speed: 1.0
+
+    gap_ver: 3
+    best_ver: 2
+
+

@@ -1,0 +1,9 @@
+path_planners:
+  ros__parameters:
+    global_path_topic: "/global_centerline"
+    odom_topic: "/odom"
+    planned_path_topic: "/planned_path"
+    frame_id: "map"
+    planner_horizon: 3.0
+    use_lattice: true
+    use_frenet: true
