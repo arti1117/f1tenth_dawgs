@@ -1,0 +1,21 @@
+pure_pursuit:
+  ros__parameters:
+    waypoint_file: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/racetracks/levine/levine_blacked_forback_speedopted.csv"  # CSV path
+    csv_log_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/racetracks/levine/levine_blacked_forback_speedopted_log.csv"
+
+    lookahead_base: 1.5   # [m] Pure Pursuit lookahead distance
+    lookahead_k: 0.6
+    wheelbase: 0.33
+    lateral_threshold: 1.2
+    v_min_lap: 0.1
+    min_lap_interval: 15.0
+    speed_gain: 1.0
+
+    local_window_size: 40
+    use_speed_lookahead: true
+    rotate_path_on_start: true
+
+    odom_topic: "/ego_racecar/odom"
+    drive_topic: "/drive"
+    lap_time_topic: "/lap_time"
+
