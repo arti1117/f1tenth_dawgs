@@ -5,6 +5,7 @@
 #include <optional>
 #include <Eigen/Dense>
 #include "path_planner/utils.hpp"
+#include "path_planner/frenet.hpp"
 
 
 namespace f1tenth
@@ -21,6 +22,7 @@ namespace f1tenth
     int nx{6}; // forward cells along horizon
     int ny{9}; // lateral cells
     int nt{7}; // heading cells
+    LogLevel log_level{LogLevel::ERROR};  // Default to ERROR only
     };
 
 
@@ -30,13 +32,16 @@ namespace f1tenth
         explicit LatticeLUT(const LatticeConfig &cfg):cfg_(cfg){}
 
         // Build or load a dense lookup of goal -> spiral params
-        void build();
+        // void build();
+        void build(const FrenetPlanner& frenet);
+
 
         // Query by relative goal (dx,dy,dtheta) quantized
         std::optional<SpiralParams> query(double dx, double dy, double dtheta) const;
 
-        // Sample path points from spiral params in local frame
-        std::vector<Waypoint> sample(const SpiralParams &sp, double ds=0.05) const;
+        // Sample path points from spiral params starting from current position
+        std::vector<Waypoint> sample(const SpiralParams &sp, double ds, const FrenetPlanner &frenet,
+                                      double s_start = 0.0, double d_start = 0.0) const;
 
 
     private:

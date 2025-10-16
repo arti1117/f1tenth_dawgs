@@ -30,11 +30,12 @@ def generate_launch_description():
 
     DeclareLaunchArgument(
         'state_file_directory',
-        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps'
+        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon'
+        # '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps'
     ),
     DeclareLaunchArgument(
         'state_file_name',
-        default_value='ekf_limit_speed_20250725_145045'
+        default_value='icheon1009_map'
     ),
     state_file_directory = LaunchConfiguration('state_file_directory')
     state_file_name = LaunchConfiguration('state_file_name')
@@ -42,12 +43,13 @@ def generate_launch_description():
 
     # Join directory and filename (with extension)
     state_file = LaunchConfiguration('state_file',
-        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/ekf_limit_speed_20250725_145045.pbstream'),
+        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map.pbstream'),
 
 
     yaml_file = LaunchConfiguration('yaml_file',
-        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/ekf_limit_speed_20250725_145045.yaml'),
+        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map.yaml'),
 #   PathJoinSubstitution([state_file_directory, state_file_name, '.pbstream']),
+
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -62,7 +64,6 @@ def generate_launch_description():
             'use_sim_time',
             default_value='false',
             description='Use simulation (Gazebo) clock if true'),
-
 
         Node(
             package='cartographer_ros',

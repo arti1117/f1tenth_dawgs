@@ -7,14 +7,14 @@ import networkx as nx
 
 # == User input ==
 script_dir = os.path.dirname(os.path.abspath(__file__))
-map_dir = script_dir + "/../../peripheral/racetracks/"
-map_name = "levine/levine_blacked_"
+map_dir = script_dir + "/../../peripheral/maps/"
+map_name = "icheon/icheon1009_"
 
 yaml_path = os.path.join(map_dir, map_name + "map.yaml")
 png_path = os.path.join(map_dir, map_name + "map.png")
 csv_path = os.path.join(map_dir, map_name + "track_center.csv")
 
-track_spacing = 0.1
+track_spacing = 0.3
 
 # 1. Load YAML
 with open(yaml_path, 'r') as f:
