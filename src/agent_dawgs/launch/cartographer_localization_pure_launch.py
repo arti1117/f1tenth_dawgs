@@ -58,8 +58,8 @@ def generate_launch_description():
                        '-configuration_basename', configuration_basename,
                        '-load_state_filename', state_file_directory + state_file_name,
                        '-minloglevel', '2']
+            # , remappings=[('odom', 'odometry/filtered'),]
         ),
-            # remappings=[('odom', 'odometry/filtered'),]
 
         DeclareLaunchArgument(
             'resolution',

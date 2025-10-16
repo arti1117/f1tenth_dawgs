@@ -18,6 +18,7 @@ namespace f1tenth {
     private:
         nav_msgs::msg::OccupancyGrid grid_;
         bool has_ = false;
+        // bool collisionRect(double x, double y, double yaw, double length, double width) const;
     };
 
 }

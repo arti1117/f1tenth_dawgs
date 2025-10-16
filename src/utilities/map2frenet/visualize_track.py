@@ -5,8 +5,8 @@ import numpy as np
 
 # == User input ==
 script_dir = os.path.dirname(os.path.abspath(__file__))
-map_dir = script_dir + "/../../peripheral/racetracks/"
-map_name = "levine/levine_blacked_"
+map_dir = script_dir + "/../../peripheral/maps/"
+map_name = "icheon/icheon1009_"
 
 yaml_path = os.path.join(map_dir, map_name + "map.yaml")
 png_path = os.path.join(map_dir, map_name + "map.png")

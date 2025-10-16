@@ -2,8 +2,8 @@
 <package format="3">
 <name>path_planner</name>
 <version>0.1.0</version>
-<description>ROS2 Foxy hybrid path planner: Frenet Optimal Trajectory + Lattice with lookup table</description>
-<maintainer email="you@example.com">dawgs_nx</maintainer>
+<description>ROS2 Foxy hybrid path planner: Frenet Optimal Trajectory and Lattice with lookup table</description>
+<maintainer email="dallma300@gmail.com">dawgs_nx</maintainer>
 <license>MIT</license>
 
 
@@ -15,11 +15,14 @@
 <depend>geometry_msgs</depend>
 <depend>sensor_msgs</depend>
 <depend>std_msgs</depend>
+<depend>visualization_msgs</depend>
 <depend>tf2</depend>
 <depend>tf2_ros</depend>
 <depend>tf2_geometry_msgs</depend>
 <exec_depend>ackermann_msgs</exec_depend>
 
 
-<export></export>
+<export>
+  <build_type>ament_cmake</build_type>
+</export>
 </package>

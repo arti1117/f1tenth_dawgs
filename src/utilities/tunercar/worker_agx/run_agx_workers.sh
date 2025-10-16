@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-MASTER_IP=${1:-192.168.0.8}  # NX IP
+MASTER_IP=${1:-192.168.3.5}  # NX IP
 JOB_PORT=${2:-5555}
 RES_PORT=${3:-5556}
 

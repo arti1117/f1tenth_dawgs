@@ -13,6 +13,7 @@ namespace f1tenth
     double y{0.0};
     double yaw{0.0};
     double s{0.0}; // cumulative arc-length
+    double v{0.0}; // velocity (m/s)
     };
 
     inline double wrapAngle(double a)
@@ -59,6 +60,13 @@ namespace f1tenth
         for (size_t i=0;i<wps.size();++i){
             path.poses[i].pose.position.x = wps[i].x;
             path.poses[i].pose.position.y = wps[i].y;
+            path.poses[i].pose.position.z = wps[i].v;  // Store velocity in z component
+
+            // Set orientation based on yaw
+            path.poses[i].pose.orientation.x = 0.0;
+            path.poses[i].pose.orientation.y = 0.0;
+            path.poses[i].pose.orientation.z = std::sin(wps[i].yaw / 2.0);
+            path.poses[i].pose.orientation.w = std::cos(wps[i].yaw / 2.0);
         }
         return path;
     }

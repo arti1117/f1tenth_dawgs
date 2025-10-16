@@ -6,10 +6,10 @@ import matplotlib.pyplot as plt
 
 # ----- User Inputs -----
 script_dir = os.path.dirname(os.path.abspath(__file__))
-map_dir = script_dir + "/../../peripheral/racetracks/"
-map_name = "levine/levine_blacked_"
+map_dir = script_dir + "/../../peripheral/maps/"
+map_name = "icheon/icheon1009_map"
 
-ref_name = "numba_speedopted.csv"
+ref_name = "lippboyd_speedopt.csv"
 cand_name = "forback_speedopted.csv"
 ref_path = os.path.join(map_dir, map_name + ref_name) # reference
 cand_path = os.path.join(map_dir, map_name + cand_name) # candidates

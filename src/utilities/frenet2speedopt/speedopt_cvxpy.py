@@ -168,7 +168,7 @@ def main():
     if len(kappa)==len(x)-1:
         kappa_nodes=np.zeros(len(x))
         kappa_nodes[0]=kappa[0]
-        kappa_nodes[1:-1]=kappa
+        kappa_nodes[1:len(x)-1]=kappa[1:]
         kappa_nodes[-1]=kappa[-1]
     else:
         kappa_nodes=kappa

@@ -1,132 +1,523 @@
 #include "path_planner/frenet.hpp"
 #include <limits>
-
+#include <algorithm>
+#include <iostream>
+#include <sstream>
 
 using namespace f1tenth;
 
-static size_t nearest_index(const std::vector<Waypoint>& ref, double x, double y)
+// Logging macro
+#define FRENET_LOG(level, msg) do { \
+    if (p_.log_level >= level) { \
+        std::cout << msg << std::endl; \
+    } \
+} while(0)
+
+void FrenetPlanner::set_reference(const std::vector<Waypoint>& ref)
 {
-    size_t best=0;
-    double bd=std::numeric_limits<double>::infinity();
-    for(size_t i=0;i<ref.size();++i){
-        double d=distance(x,y,ref[i].x,ref[i].y);
-        if(d<bd){bd=d; best=i;}
+    ref_ = ref;
+    if (ref_.empty()) {
+        FRENET_LOG(LogLevel::ERROR, "[Frenet] ERROR: Reference path is empty!");
+        return;
     }
-    return best;
+
+    FRENET_LOG(LogLevel::INFO, "[Frenet] Setting reference path with " << ref_.size() << " waypoints");
+    FRENET_LOG(LogLevel::DEBUG, "[Frenet] Path bounds: x=[" << ref_.front().x << ", " << ref_.back().x
+              << "] y=[" << ref_.front().y << ", " << ref_.back().y << "]");
+
+    // Check if path is closed
+    double first_last_dist = distance(ref_.front().x, ref_.front().y, ref_.back().x, ref_.back().y);
+    is_closed_loop_ = (first_last_dist < 2.0);
+
+    FRENET_LOG(LogLevel::DEBUG, "[Frenet] First-last distance: " << first_last_dist << " m");
+    FRENET_LOG(LogLevel::INFO, "[Frenet] Path is " << (is_closed_loop_ ? "CLOSED LOOP" : "OPEN"));
+
+    // Calculate total length
+    total_length_ = ref_.back().s;
+    if (is_closed_loop_) {
+        total_length_ += first_last_dist;
+    }
+
+    FRENET_LOG(LogLevel::INFO, "[Frenet] Total path length: " << total_length_ << " m");
+    FRENET_LOG(LogLevel::DEBUG, "[Frenet] Last waypoint s-coordinate: " << ref_.back().s << " m");
+
+    // Build KD-tree
+    build_kdtree();
 }
 
-bool FrenetPlanner::cart2frenet(double x, double y, size_t &idx, FrenetState &out) const
+void FrenetPlanner::build_kdtree()
 {
-    if(ref_.size()<2) return false;
-    idx = nearest_index(ref_,x,y);
-    size_t i2 = std::min(idx+1, ref_.size()-1);
-    double rx=ref_[idx].x, ry=ref_[idx].y;
-    double tx=ref_[i2].x-rx, ty=ref_[i2].y-ry;
-    double nx=-std::sin(ref_[idx].yaw), ny=std::cos(ref_[idx].yaw);
-    double dx=x-rx, dy=y-ry;
-    double s=ref_[idx].s + (dx*tx+dy*ty)/std::max(1e-6,std::hypot(tx,ty));
-    double d=dx*nx+dy*ny;
-    out = {s,d,0,0,0};
-    return true;
+    if (kdtree_) {
+        delete kdtree_;
+        kdtree_ = nullptr;
+    }
+
+    cloud_.pts.clear();
+    cloud_.pts = ref_;  // Copy waypoints to cloud
+
+    if (cloud_.pts.empty()) {
+        FRENET_LOG(LogLevel::ERROR, "[Frenet] ERROR: Cannot build KD-tree with empty waypoints!");
+        return;
+    }
+
+    FRENET_LOG(LogLevel::DEBUG, "[Frenet] Building KD-tree with " << cloud_.pts.size() << " points");
+
+    // Build KD-tree
+    kdtree_ = new KDTree(2 /*dim*/, cloud_, nanoflann::KDTreeSingleIndexAdaptorParams(10 /*max leaf*/));
+    kdtree_->buildIndex();
+
+    FRENET_LOG(LogLevel::DEBUG, "[Frenet] KD-tree built successfully");
 }
 
+size_t FrenetPlanner::find_nearest_waypoint(double x, double y) const
+{
+    if (!kdtree_ || ref_.empty()) {
+        FRENET_LOG(LogLevel::WARN, "[Frenet] WARNING: KD-tree not initialized or ref empty, returning 0");
+        return 0;
+    }
+
+    // Query point
+    double query_pt[2] = {x, y};
+
+    // Search for nearest neighbor
+    size_t nearest_idx;
+    double out_dist_sqr;
+    nanoflann::KNNResultSet<double> resultSet(1);
+    resultSet.init(&nearest_idx, &out_dist_sqr);
+    kdtree_->findNeighbors(resultSet, &query_pt[0], nanoflann::SearchParameters(10));
+
+    double dist = std::sqrt(out_dist_sqr);
+    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Nearest waypoint to (" << x << ", " << y << ") is idx="
+              << nearest_idx << " at (" << ref_[nearest_idx].x << ", "
+              << ref_[nearest_idx].y << ") dist=" << dist << " m");
+
+    return nearest_idx;
+}
+
+bool FrenetPlanner::cart2frenet(double x, double y, size_t &best_seg_idx, FrenetState &out) const
+{
+  FRENET_LOG(LogLevel::VERBOSE, "\n[Frenet] ===== cart2frenet conversion =====");
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Input: x=" << x << ", y=" << y);
+
+  // require at least 2 waypoints
+  if (ref_.size() < 2 || !kdtree_) {
+    FRENET_LOG(LogLevel::ERROR, "[Frenet] ERROR: ref size=" << ref_.size()
+              << ", kdtree=" << (kdtree_ ? "valid" : "null"));
+    return false;
+  }
+
+  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Path has " << ref_.size() << " waypoints, closed="
+            << is_closed_loop_ << ", total_length=" << total_length_);
+
+  // Use KD-tree to find nearest waypoint quickly
+  size_t nearest_idx = find_nearest_waypoint(x, y);
+
+  // Local search window around nearest point
+  const int search_window = 5;  // Search ±5 segments around nearest point
+
+  double best_dist = std::numeric_limits<double>::infinity();
+  double best_s = 0.0;
+  double best_d = 0.0;
+  bool found = false;
+
+  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Searching ±" << search_window << " segments around nearest idx="
+            << nearest_idx);
+
+  // Search locally around nearest point for best projection
+  // This is more efficient than searching all segments
+  for (int offset = -search_window; offset <= search_window; ++offset) {
+    int i = static_cast<int>(nearest_idx) + offset;
+
+    // Handle wrapping for closed loops
+    if (is_closed_loop_) {
+      i = (i + ref_.size()) % ref_.size();
+    } else {
+      if (i < 0 || i >= static_cast<int>(ref_.size()) - 1) {
+        FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Skipping out-of-bounds segment idx=" << i);
+        continue;
+      }
+    }
+
+    size_t j = (i + 1) % ref_.size();  // Next index with wrapping
+
+    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Checking segment " << i << "->" << j
+              << " (" << ref_[i].x << "," << ref_[i].y << ") -> ("
+              << ref_[j].x << "," << ref_[j].y << ")");
+
+    double x1 = ref_[i].x, y1 = ref_[i].y;
+    double x2 = ref_[j].x, y2 = ref_[j].y;
+    double vx = x2 - x1;
+    double vy = y2 - y1;
+    double seg_norm2 = vx*vx + vy*vy;
+
+    if (seg_norm2 < 1e-9) continue;  // Skip degenerate segments
+
+    // Project point onto segment
+    double t = ((x - x1) * vx + (y - y1) * vy) / seg_norm2;
+    t = std::max(0.0, std::min(1.0, t));  // Clamp to [0,1]
+
+    double px = x1 + t * vx;
+    double py = y1 + t * vy;
+    double dist = std::hypot(x - px, y - py);
+
+    FRENET_LOG(LogLevel::VERBOSE, "[Frenet]   Projection: t=" << t << ", proj=(" << px << "," << py
+              << "), dist=" << dist << " m");
+
+    if (dist < best_dist) {
+      best_dist = dist;
+      best_seg_idx = i;
+
+      // Calculate s coordinate
+      double s_at_i = ref_[i].s;
+      double proj_dist = t * std::sqrt(seg_norm2);
+      best_s = s_at_i + proj_dist;
+
+      FRENET_LOG(LogLevel::DEBUG, "[Frenet]   NEW BEST! s_at_i=" << s_at_i << ", proj_dist="
+                << proj_dist << ", best_s=" << best_s);
+
+      // For closed loops, handle wrapping when on the closing segment
+      if (is_closed_loop_ && static_cast<size_t>(i) == ref_.size() - 1) {
+        // On closing segment (last->first)
+        best_s = ref_.back().s + proj_dist;
+        FRENET_LOG(LogLevel::DEBUG, "[Frenet]   Closing segment detected! Adjusted best_s=" << best_s);
+        // Wrap s if it exceeds total length
+        if (best_s >= total_length_) {
+          best_s = std::fmod(best_s, total_length_);
+          FRENET_LOG(LogLevel::DEBUG, "[Frenet]   Wrapped s to " << best_s);
+        }
+      }
+
+      // Calculate signed lateral distance
+      double seg_yaw = std::atan2(vy, vx);
+      double nx = -std::sin(seg_yaw);
+      double ny = std::cos(seg_yaw);
+      best_d = (x - px) * nx + (y - py) * ny;
+
+      FRENET_LOG(LogLevel::VERBOSE, "[Frenet]   Lateral: seg_yaw=" << seg_yaw
+                << " rad, best_d=" << best_d << " m");
+      found = true;
+    }
+  }
+
+  if (!found) {
+    FRENET_LOG(LogLevel::ERROR, "[Frenet] ERROR: No valid projection found!");
+    return false;
+  }
+
+  // For closed loops, ensure s is wrapped to [0, total_length)
+  if (is_closed_loop_ && total_length_ > 0) {
+    double original_s = best_s;
+    best_s = std::fmod(best_s + total_length_, total_length_);  // Handle negative s
+    if (original_s != best_s) {
+      FRENET_LOG(LogLevel::DEBUG, "[Frenet] Final wrapping: " << original_s << " -> " << best_s);
+    }
+  }
+
+  // Fill out frenet state
+  out.s = best_s;
+  out.d = best_d;
+  out.ds = 0.0;
+  out.dd = 0.0;
+  out.ddd = 0.0;
+
+  FRENET_LOG(LogLevel::DEBUG, "[Frenet] SUCCESS: s=" << out.s << ", d=" << out.d
+            << ", seg_idx=" << best_seg_idx << ", dist=" << best_dist << " m");
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] ===== cart2frenet complete =====\n");
+
+  return true;
+}
 
 bool FrenetPlanner::frenet2cart(double s, double d, double &x, double &y, double &yaw) const
 {
-    if(ref_.size()<2) return false;
-    // find segment containing s
-    size_t i=0;
-    while(i+1<ref_.size() && ref_[i+1].s < s) ++i;
-    if(i+1>=ref_.size()) i=ref_.size()-2;
-    const auto &p0 = ref_[i];
-    const auto &p1 = ref_[i+1];
-    const double ds = std::max(1e-6, p1.s - p0.s);
-    const double r = (s - p0.s) / ds;
-    const double cx = p0.x + r*(p1.x - p0.x);
-    const double cy = p0.y + r*(p1.y - p0.y);
-    const double cyaw = std::atan2(p1.y - p0.y, p1.x - p0.x);
-    const double nx = -std::sin(cyaw), ny = std::cos(cyaw);
-    x = cx + nx * d;
-    y = cy + ny * d;
-    yaw = cyaw;
+  FRENET_LOG(LogLevel::VERBOSE, "\n[Frenet] ===== frenet2cart conversion =====");
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Input: s=" << s << ", d=" << d);
+
+  if (ref_.size() < 2) {
+    FRENET_LOG(LogLevel::ERROR, "[Frenet] ERROR: ref size=" << ref_.size() << " (need at least 2)");
+    return false;
+  }
+
+  // For closed loops, wrap s to [0, total_length)
+  double s_wrapped = s;
+  if (is_closed_loop_ && total_length_ > 0) {
+    s_wrapped = std::fmod(s, total_length_);
+    if (s_wrapped < 0) s_wrapped += total_length_;
+    if (s != s_wrapped) {
+      FRENET_LOG(LogLevel::DEBUG, "[Frenet] Wrapped s: " << s << " -> " << s_wrapped
+                << " (total_length=" << total_length_ << ")");
+    }
+  }
+
+  // Handle closing segment for closed paths
+  double first_last_dist = is_closed_loop_ ? distance(ref_.front().x, ref_.front().y, ref_.back().x, ref_.back().y) : 0;
+  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Closed loop: " << is_closed_loop_
+            << ", last_s=" << ref_.back().s
+            << ", first_last_dist=" << first_last_dist);
+
+  if (is_closed_loop_ && s_wrapped >= ref_.back().s) {
+    FRENET_LOG(LogLevel::DEBUG, "[Frenet] Point is on closing segment (last->first)");
+    // Point is on the closing segment (last -> first)
+    double s_on_closing = s_wrapped - ref_.back().s;
+    double closing_length = first_last_dist;
+
+    if (closing_length > 1e-6) {
+      double r = s_on_closing / closing_length;
+      r = std::max(0.0, std::min(1.0, r));
+
+      const auto &p0 = ref_.back();
+      const auto &p1 = ref_.front();
+
+      double cx = p0.x + r * (p1.x - p0.x);
+      double cy = p0.y + r * (p1.y - p0.y);
+      double cyaw = std::atan2(p1.y - p0.y, p1.x - p0.x);
+
+      // Apply lateral offset
+      double nx = -std::sin(cyaw);
+      double ny = std::cos(cyaw);
+      x = cx + nx * d;
+      y = cy + ny * d;
+      yaw = cyaw;
+
+      FRENET_LOG(LogLevel::DEBUG, "[Frenet] Closing segment result: x=" << x << ", y=" << y
+                << ", yaw=" << yaw << " rad");
+      FRENET_LOG(LogLevel::VERBOSE, "[Frenet] ===== frenet2cart complete =====\n");
+      return true;
+    }
+  }
+
+  // Find segment containing s by linear search
+  size_t idx = 0;
+  if (s_wrapped <= ref_.front().s) {
+    idx = 0;
+    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] s_wrapped <= front.s, using idx=0");
+  } else if (s_wrapped >= ref_.back().s) {
+    idx = std::max(0, static_cast<int>(ref_.size()) - 2);
+    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] s_wrapped >= back.s, using idx=" << idx);
+  } else {
+    for (size_t i = 0; i + 1 < ref_.size(); ++i) {
+      if (ref_[i].s <= s_wrapped && s_wrapped <= ref_[i+1].s) {
+        idx = i;
+        FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Found segment: idx=" << idx
+                  << " [" << ref_[i].s << ", " << ref_[i+1].s << "]");
+        break;
+      }
+    }
+  }
+
+  const auto &p0 = ref_[idx];
+  const auto &p1 = ref_[(idx + 1) % ref_.size()];
+  double ds_seg = (idx + 1 < ref_.size()) ? (p1.s - p0.s) : first_last_dist;
+
+  if (std::abs(ds_seg) < 1e-6) {
+    x = p0.x;
+    y = p0.y;
+    yaw = p0.yaw;
     return true;
+  }
+
+  double r = (s_wrapped - p0.s) / ds_seg;
+  r = std::max(0.0, std::min(1.0, r));
+
+  double cx = p0.x + r * (p1.x - p0.x);
+  double cy = p0.y + r * (p1.y - p0.y);
+  double cyaw = std::atan2(p1.y - p0.y, p1.x - p0.x);
+
+  // Apply lateral offset
+  double nx = -std::sin(cyaw);
+  double ny = std::cos(cyaw);
+  x = cx + nx * d;
+  y = cy + ny * d;
+  yaw = cyaw;
+
+  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Normal segment result: x=" << x << ", y=" << y
+            << ", yaw=" << yaw << " rad");
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Segment " << idx << "->" << (idx+1) % ref_.size()
+            << ", r=" << r << ", center=(" << cx << "," << cy << ")");
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] ===== frenet2cart complete =====\n");
+  return true;
 }
 
-std::vector<FrenetTraj> FrenetPlanner::generate(const FrenetState& fs, const std::vector<std::pair<double,double>>& obstacles)
+double FrenetPlanner::curvature_at_s(double s) const
+{
+    if (ref_.size() < 3) return 0.0;  // Need at least 3 points for curvature
+
+    // Wrap s for closed loops
+    double s_wrapped = s;
+    if (is_closed_loop_ && total_length_ > 0) {
+        s_wrapped = std::fmod(s, total_length_);
+        if (s_wrapped < 0) s_wrapped += total_length_;
+    }
+
+    // Find segment containing s
+    size_t idx = 0;
+    if (s_wrapped <= ref_.front().s) {
+        idx = 0;
+    } else if (s_wrapped >= ref_.back().s) {
+        idx = std::max(0, static_cast<int>(ref_.size()) - 2);
+    } else {
+        for (size_t i = 0; i + 1 < ref_.size(); ++i) {
+            if (ref_[i].s <= s_wrapped && s_wrapped <= ref_[i+1].s) {
+                idx = i;
+                break;
+            }
+        }
+    }
+
+    // Use 3-point curvature estimation
+    size_t i0 = (idx == 0) ? (is_closed_loop_ ? ref_.size() - 1 : 0) : idx - 1;
+    size_t i1 = idx;
+    size_t i2 = (idx + 1 >= ref_.size()) ? (is_closed_loop_ ? 0 : ref_.size() - 1) : idx + 1;
+
+    // Get three points
+    double x0 = ref_[i0].x, y0 = ref_[i0].y;
+    double x1 = ref_[i1].x, y1 = ref_[i1].y;
+    double x2 = ref_[i2].x, y2 = ref_[i2].y;
+
+    // Calculate curvature using formula: k = 2 * |cross(v1, v2)| / |v1|^3
+    double v1x = x1 - x0, v1y = y1 - y0;
+    double v2x = x2 - x1, v2y = y2 - y1;
+
+    double cross = v1x * v2y - v1y * v2x;
+    double v1_mag = std::sqrt(v1x * v1x + v1y * v1y);
+
+    if (v1_mag < 1e-6) return 0.0;
+
+    double curvature = 2.0 * std::abs(cross) / (v1_mag * v1_mag * v1_mag);
+
+    // Add sign based on turning direction
+    if (cross < 0) curvature = -curvature;
+
+    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Curvature at s=" << s << ": k=" << curvature);
+
+    return curvature;
+}
+
+std::vector<FrenetTraj> FrenetPlanner::generate(
+    const FrenetState& fs,
+    const std::vector<std::pair<double,double>>& obstacles)
 {
     std::vector<FrenetTraj> cands;
-    if(ref_.empty()) return cands;
+    if (ref_.empty()) return cands;
 
-
-    // For each lateral goal d_f and terminal time T, use quintic poly for d(t), quartic for s(t)
-    for(double T : p_.t_samples){
-        for(double df : p_.d_samples){
-            // lateral quintic: boundary (d, d', d'') -> (df, 0, 0)
-            Eigen::Matrix<double,3,3> A;
-            A << pow(T,3), pow(T,4), pow(T,5),
-            3*pow(T,2), 4*pow(T,3), 5*pow(T,4),
-            6*T, 12*pow(T,2), 20*pow(T,3);
-            Eigen::Vector3d b; b << df - (fs.d + fs.ds*T + 0.5*fs.dd*T*T),
-            - (fs.ds + fs.dd*T),
-            - fs.dd;
+    // == Parameter sampling ==
+    for (double T : p_.t_samples) {
+        for (double df : p_.d_samples) {
+            // === Lateral quintic (d) ===
+            // boundary: (d, d', d'') -> (df, 0, 0)
+            Eigen::Matrix3d A;
+            A << pow(T, 3), pow(T, 4), pow(T, 5),
+                 3 * pow(T, 2), 4 * pow(T, 3), 5 * pow(T, 4),
+                 6 * T, 12 * pow(T, 2), 20 * pow(T, 3);
+            Eigen::Vector3d b;
+            b << df - (fs.d + fs.dd * T + 0.5 * fs.ddd * T * T),
+                 - (fs.dd + fs.ddd * T),
+                 - fs.ddd;
             Eigen::Vector3d x = A.colPivHouseholderQr().solve(b);
-            double a0=fs.d, a1=fs.ds, a2=0.5*fs.dd, a3=x(0), a4=x(1), a5=x(2);
 
+            // corrected initial condition mapping
+            double a0 = fs.d;      // position
+            double a1 = fs.dd;     // d'(0)
+            double a2 = 0.5 * fs.ddd; // d''(0)/2
+            double a3 = x(0);
+            double a4 = x(1);
+            double a5 = x(2);
 
-            // longitudinal quartic: boundary (s, s', s'') -> (s + v*T, v, 0)
+            // === Longitudinal quartic (s) ===
+            // boundary: (s, s', s'') -> (s + v*T, v, 0)
             double v = p_.target_speed;
-            Eigen::Matrix<double,2,2> As;
-            As << 3*pow(T,2), 4*pow(T,3),
-            6*T, 12*pow(T,2);
-            Eigen::Vector2d bs; bs << (v - (fs.ds + fs.dd*T)),
-            - fs.dd;
+            double s_ddot_init = 0.0;  // assume zero if unavailable
+
+            Eigen::Matrix2d As;
+            As << 3 * pow(T, 2), 4 * pow(T, 3),
+                  6 * T, 12 * pow(T, 2);
+            Eigen::Vector2d bs;
+            bs << (v - (fs.ds + s_ddot_init * T)),
+                   - s_ddot_init;
             Eigen::Vector2d xs = As.colPivHouseholderQr().solve(bs);
-            double b0=fs.s, b1=fs.ds, b2=0.5*fs.dd, b3=xs(0), b4=xs(1);
 
+            double b0 = fs.s;
+            double b1 = fs.ds;
+            double b2 = 0.5 * s_ddot_init;
+            double b3 = xs(0);
+            double b4 = xs(1);
 
+            // === Trajectory sampling ===
             FrenetTraj tr;
-            for(double t=0.0; t<=T+1e-6; t+=p_.dt){
+            tr.collision = false;
+            tr.cost = 0.0;
+
+            for (double t = 0.0; t <= T + 1e-6; t += p_.dt) {
+                // Longitudinal motion
+                double s = b0 + b1 * t + b2 * t * t + b3 * t * t * t + b4 * t * t * t * t;
+                double s_dot = b1 + 2 * b2 * t + 3 * b3 * t * t + 4 * b4 * t * t * t;
+
+                // Lateral motion
+                double d = a0 + a1 * t + a2 * t * t + a3 * t * t * t + a4 * t * t * t * t + a5 * t * t * t * t * t;
+                double d_dot = a1 + 2 * a2 * t + 3 * a3 * t * t + 4 * a4 * t * t * t + 5 * a5 * t * t * t * t;
+                double d_ddot = 2 * a2 + 6 * a3 * t + 12 * a4 * t * t + 20 * a5 * t * t * t;
+
+                // sanity checks
+                if (std::abs(d_ddot) > p_.max_accel * 2.0) { tr.cost = 1e9; break; }
+                if (s_dot < 0.0 || s_dot > p_.max_speed * 1.5) { tr.cost = 1e9; break; }
+
+                // wrap s for closed loops
+                double s_wrapped = s;
+                if (is_closed_loop_ && total_length_ > 0) {
+                    s_wrapped = std::fmod(s, total_length_);
+                    if (s_wrapped < 0) s_wrapped += total_length_;
+                }
+
+                // Convert Frenet → Cartesian
+                double xg, yg, yawg;
+                if (!frenet2cart(s_wrapped, d, xg, yg, yawg)) {
+                    tr.cost = 1e9; break;
+                }
+
                 tr.t.push_back(t);
-                // s(t)
-                double s = b0 + b1*t + b2*t*t + b3*t*t*t + b4*t*t*t*t;
-                double ds = b1 + 2*b2*t + 3*b3*t*t + 4*b4*t*t*t;
-                // d(t)
-                double d = a0 + a1*t + a2*t*t + a3*t*t*t + a4*t*t*t*t + a5*t*t*t*t*t;
-                double dd = a1 + 2*a2*t + 3*a3*t*t + 4*a4*t*t*t + 5*a5*t*t*t*t;
-                // curvature & limits (approx)
-                if(std::abs(dd) > p_.max_accel*2) { tr.cost = 1e9; break; }
-                if(ds < 0.0 || ds > p_.max_speed*1.5) { tr.cost = 1e9; break; }
-                double x,y,yaw; if(!frenet2cart(s,d,x,y,yaw)){ tr.cost=1e9; break; }
-                tr.s.push_back(s); tr.d.push_back(d);
-                tr.x.push_back(x); tr.y.push_back(y); tr.yaw.push_back(yaw);
+                tr.s.push_back(s_wrapped);
+                tr.d.push_back(d);
+                tr.x.push_back(xg);
+                tr.y.push_back(yg);
+                tr.yaw.push_back(yawg);
+                tr.v.push_back(s_dot);  // Store longitudinal velocity
             }
 
-
-            // Collision check (circle buffer)
-            if(tr.x.size()>1){
-            for(size_t i=0;i<tr.x.size();++i){
-                for(const auto &ob: obstacles){
-                    if(distance(tr.x[i], tr.y[i], ob.first, ob.second) < p_.safety_radius){ tr.collision=true; break; }
-                }
-                if(std::abs(tr.d[i]) > p_.road_half_width) { tr.collision=true; break; }
-                if(tr.collision) break;
+            // === Collision check ===
+            if (tr.x.size() > 1) {
+                for (size_t i = 0; i < tr.x.size(); ++i) {
+                    for (const auto &ob : obstacles) {
+                        if (distance(tr.x[i], tr.y[i], ob.first, ob.second) < p_.safety_radius) {
+                            tr.collision = true;
+                            break;
+                        }
+                    }
+                    if (std::abs(tr.d[i]) > p_.road_half_width) { tr.collision = true; break; }
+                    if (tr.collision) break;
                 }
             }
 
+            // === Cost computation ===
+            if (!tr.collision && tr.x.size() > 1) {
+                double j_lat = 0.0;
+                for (size_t i = 2; i < tr.d.size(); ++i) {
+                    j_lat += std::abs(tr.d[i] - 2 * tr.d[i - 1] + tr.d[i - 2]);
+                }
+                double dev = std::accumulate(tr.d.begin(), tr.d.end(), 0.0,
+                    [](double a, double b){ return a + std::abs(b); }) / tr.d.size();
+                double v_err = 0.0;  // optional
 
-            if(!tr.collision && tr.x.size()>1){
-                // Simple cost: lateral jerk proxy + time + lateral deviation + speed error
-                double j_lat=0.0;
-                for(size_t i=2;i<tr.d.size();++i){ j_lat += std::abs(tr.d[i]-2*tr.d[i-1]+tr.d[i-2]); }
-                double dev = std::accumulate(tr.d.begin(), tr.d.end(), 0.0, [](double a,double b){return a+std::abs(b);} )/tr.d.size();
-                double v_err=0.0; // omitted for brevity
-                tr.cost = p_.k_j*j_lat + p_.k_t*T + p_.k_d*dev + p_.k_v*v_err;
+                tr.cost = p_.k_j * j_lat + p_.k_t * T + p_.k_d * dev + p_.k_v * v_err;
                 cands.push_back(std::move(tr));
             }
         }
     }
+
     return cands;
 }
+
+
+
+
 
 std::optional<FrenetTraj> FrenetPlanner::select_best(const std::vector<FrenetTraj>& cands)
 {
