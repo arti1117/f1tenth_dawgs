@@ -1,0 +1,48 @@
+joy:
+  ros__parameters:
+    # device_name: /dev/input/joypad-f710	# was: joypad-f710
+    device_id: 0
+    deadzone: 0.15   # was 0.01(works in joypad-f710) 0.1(works in joypad-xbox)
+    autorepeat_rate: 20.0
+    coalesce_interval: 0.01
+
+joy_teleop:
+  ros__parameters:
+    default:
+      type: topic
+      interface_type: ackermann_msgs/msg/AckermannDriveStamped
+      topic_name: teleop
+      deadman_buttons: [5] # this's disabling deadman switch. when press the switch, it disable deadman. otherwise it's enabled at all time.
+      axis_mappings:
+        drive-speed:
+          axis: 1
+          scale: 0.0
+          offset: 0.0
+        drive-steering_angle:
+          axis: 2
+          scale: 0.0
+          offset: 0.0
+
+    human_control:
+      type: topic
+      interface_type: ackermann_msgs/msg/AckermannDriveStamped
+      topic_name: teleop
+      deadman_buttons: [4]
+      axis_mappings:
+        drive-speed:
+          axis: 4       # was 1(works in joypad-f710) 4(works in joypad-xbox)
+          scale: 10.0   # was 5
+          offset: 0.0
+        drive-steering_angle:
+          axis: 0 	    # was 2(works in joypad-f710) 0(works in joypad-xbox)
+          scale: 0.41   # was 0.34
+          offset: 0.0
+
+    autonomous_control:
+      type: topic
+      interface_type: std_msgs/msg/Int8
+      topic_name: /dev/null
+      deadman_buttons: [5]
+      message_value:
+        data:
+          value: 0
