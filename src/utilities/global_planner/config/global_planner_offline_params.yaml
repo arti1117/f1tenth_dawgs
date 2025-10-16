@@ -1,0 +1,90 @@
+global_planner_offline_node:
+  ros__parameters:
+    # === MAP CONFIGURATION ===
+    # Specify the map name and directory
+    # Example: map_name: "hangar_1905_v0"
+    #          map_dir: "/home/user/forza_ws/src/race_stack/stack_master/maps/hangar_1905_v0"
+
+    # map_name: "levine_map"
+    # map_dir: "/home/dawgs_nx/forza_ws/src/race_stack/planner/global_planner/maps/levine"
+    # map_name: "Budapest_map"
+    # map_dir: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/racetracks/Budapest"
+    map_name: "icheon1009_map"
+    map_dir: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/"
+    # /home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/map_1009v3_20251009_224402.png
+
+    # === TRAJECTORY OPTIMIZATION PARAMETERS ===
+    # Safety width for IQP (iterative quadratic programming) trajectory
+    # Smaller values allow tighter racing lines but less safety margin
+    safety_width: 0.35        # meters
+
+    # Safety width for shortest path trajectory (used for overtaking)
+    # Generally smaller than IQP safety width
+    safety_width_sp: 0.30     # meters
+
+
+    # === TRACK AND CENTERLINE SETTINGS ===
+    filter_kernel_size: 7             # Image blur kernel (odd number)
+    resample_step: 0.1                # Step for centerline resampling
+    required_laps: 3
+
+    # === OPERATION MODE ===
+    # Reverse the direction of the generated raceline
+    reverse_mapping: false
+
+    # Show matplotlib plots during trajectory generation
+    # Set to false for automated/batch processing
+    show_plots: true
+
+
+    # === GLOBAL TRAJECTORY SETTINGS ===
+    max_speed: 15.0                    # Target max velocity [m/s]
+    min_speed: 0.5
+    max_accel: 3.0                    # [m/s^2]
+    max_decel: -3.0
+    curvature_gain: 1.0               # vx = max_speed / (1 + curvature_gain * |kappa|)
+    smooth_window: 7                  # Moving average window for smoothing
+    traj_type: "iqp"                  # "iqp" (curvature-opt) or "sp" (shortest-path)
+    save_json: True                   # Save global_waypoints.json
+    publish_rate: 10.0                # Hz
+    rate: 10.0
+
+
+
+
+    # === ADVANCED PARAMETERS (usually don't need to change) ===
+    occupancy_grid_threshold: 50  # Not used in offline mode
+    filter_kernel_size: 3         # Image processing kernel size
+    required_laps: 0              # Not used in offline mode
+
+# ============================================================================
+# CONFIGURATION EXAMPLES FOR DIFFERENT MAPS
+# ============================================================================
+#
+# To use a different map, modify map_name and map_dir:
+#
+# Example 1: GLC Smile Small
+# ----------------------------
+# map_name: "GLC_smile_small"
+# map_dir: "/home/dawgs_nx/forza_ws/src/race_stack/stack_master/maps/GLC_smile_small"
+#
+# Example 2: GLC OT EZ
+# ----------------------------
+# map_name: "glc_ot_ez"
+# map_dir: "/home/dawgs_nx/forza_ws/src/race_stack/stack_master/maps/glc_ot_ez"
+#
+# Example 3: Custom map with tighter racing line
+# ----------------------------
+# map_name: "my_custom_track"
+# map_dir: "/path/to/my/maps/my_custom_track"
+# safety_width: 0.30        # More conservative
+# safety_width_sp: 0.25
+# reverse_mapping: false
+#
+# Example 4: Reverse direction racing
+# ----------------------------
+# map_name: "hangar_1905_v0"
+# map_dir: "/home/dawgs_nx/forza_ws/src/race_stack/stack_master/maps/hangar_1905_v0"
+# reverse_mapping: true     # Run track in opposite direction
+#
+# ============================================================================

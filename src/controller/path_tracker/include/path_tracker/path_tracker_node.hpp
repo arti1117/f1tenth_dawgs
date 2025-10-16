@@ -1,0 +1,129 @@
+#pragma once
+
+#ifndef PATH_TRACKER_HPP
+#define PATH_TRACKER_HPP
+
+#include <chrono>
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <string>
+#include <vector>
+#include <algorithm>
+
+#include "rclcpp/rclcpp.hpp"
+#include "nav_msgs/msg/path.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
+#include "visualization_msgs/msg/marker.hpp"
+
+struct PathPoint {
+  double x;
+  double y;
+  double yaw;
+  double v;  // desired speed at this point
+};
+
+// quaternion -> yaw
+inline double quatToYaw(const geometry_msgs::msg::Quaternion &q) {
+  double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+  double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+  return std::atan2(siny_cosp, cosy_cosp);
+}
+
+// Find closest point on path
+struct ClosestPointResult {
+    size_t idx;
+    double distance;
+    double x;
+    double y;
+};
+
+// Lookahead result
+struct LookaheadResult {
+    double x;
+    double y;
+    double v;  // interpolated speed
+    size_t idx;
+    bool found;
+};
+
+class PathTrackerNode : public rclcpp::Node {
+public:
+  PathTrackerNode();
+
+private:
+  // Parameters
+  double lookahead_base_;
+  double lookahead_k_;
+  bool use_speed_lookahead_;
+  double wheelbase_;
+  double default_speed_;
+  double max_steering_angle_;
+  double path_timeout_;
+
+  // Speed control modes
+  enum class SpeedMode {
+    DEFAULT,           // Use default_speed
+    PATH_VELOCITY,     // Use velocity from path points
+    CURVATURE_BASED,   // Calculate from curvature
+    OPTIMIZE           // Use minimum of path_velocity, curvature, and steering_limit
+  };
+  SpeedMode speed_mode_;
+
+  // Curvature-based speed parameters
+  double friction_coeff_;     // friction coefficient (mu)
+  double max_speed_limit_;    // maximum speed limit
+  double min_speed_limit_;    // minimum speed limit
+
+  // Steering-based speed limiting parameters
+  bool use_steering_limit_;
+  double max_lateral_accel_;
+  std::vector<double> steering_angles_;  // Lookup table steering angles
+  std::vector<double> velocities_;       // Lookup table velocities
+  std::vector<std::vector<double>> accel_table_;  // 2D acceleration table
+
+  std::string odom_topic_, drive_topic_, path_topic_, global_path_topic_;
+  std::string base_frame_;
+
+  // Path data
+  std::vector<PathPoint> current_path_;
+  std::vector<PathPoint> global_path_;  // for velocity reference
+  rclcpp::Time last_path_time_;
+  bool path_received_;
+  bool global_path_received_;
+
+  // ROS interfaces
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr global_path_sub_;
+  rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr lookahead_pub_;
+
+  // Callbacks
+  void pathCallback(const nav_msgs::msg::Path::SharedPtr msg);
+  void globalPathCallback(const nav_msgs::msg::Path::SharedPtr msg);
+  void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+
+  // Path tracking functions
+  ClosestPointResult findClosestPoint(double px, double py);
+  LookaheadResult findLookaheadPoint(size_t start_idx, double lookahead_dist);
+  double computeSteeringAngle(double px, double py, double yaw,
+                              double goal_x, double goal_y);
+
+  // Speed computation functions
+  double computeSpeed(const LookaheadResult& lookahead, double current_speed);
+  double getGlobalPathSpeed(double x, double y);
+  double computeCurvatureSpeed(size_t idx);
+  double computeCurvature(const PathPoint& p1, const PathPoint& p2, const PathPoint& p3);
+
+  // Steering-based speed limiting functions
+  bool loadSteeringLookupTable(const std::string& filename);
+  double computeMaxSafeSpeed(double steering_angle, double current_speed);
+
+  // Visualization
+  void visualizeLookahead(double x, double y);
+};
+
+#endif

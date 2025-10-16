@@ -1,0 +1,67 @@
+path_planner_node:
+  ros__parameters:
+    # CSV file path - if empty, will wait for global_path_topic
+    # Set to path like "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/racetracks/track.csv"
+
+    # Pre-conditions
+    #   - check base_system(f1tenth) map
+    #   - run speedopt or global_planner_offline
+    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_gw_iqp.csv"
+    # "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_lippboyd_speedopted.csv"
+
+
+
+    # Topics
+    odom_topic: "/odom"
+    scan_topic: "/scan"
+    planned_path_topic: "/planned_path"
+    global_path_topic: "/global_centerline"  # Published if CSV loaded
+    frenet_path_topic: "/frenet_path"
+    lut_path_topic: "/lut_path"
+
+    # Frame
+    frame_id: "map"
+
+    # Planner settings
+    use_lattice: true
+    use_frenet: true
+    planner_horizon: 3.0
+
+    # Frenet trajectory generation settings
+    frenet_time_horizon: 3.0      # Maximum time horizon for trajectory [s]
+    frenet_min_time: 1.0           # Minimum time horizon [s]
+    frenet_target_speed: 3.0       # Target speed [m/s]
+    frenet_dt: 0.05                # Time step for trajectory sampling [s]
+    frenet_max_speed: 15.0         # Maximum allowed speed [m/s]
+    frenet_max_accel: 4.0          # Maximum lateral acceleration [m/s^2]
+
+    # Lateral sampling (distance from centerline in meters)
+    frenet_d_samples: [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
+
+    # Time horizon samples (in seconds)
+    frenet_t_samples: [1.5, 2.0, 2.5, 3.0]
+
+    # Cost function weights
+    frenet_k_jerk: 0.1       # Jerk (smoothness) weight
+    frenet_k_time: 0.1       # Time weight (prefer faster trajectories)
+    frenet_k_deviation: 1.0  # Deviation from centerline weight
+    frenet_k_velocity: 1.0   # Velocity error weight
+
+    # Safety parameters
+    frenet_safety_radius: 0.3     # Safety radius around obstacles [m]
+    frenet_road_half_width: 1.2   # Half width of drivable area [m]
+
+    # Visualization
+    visualize_paths: true
+    publish_rate: 1.0  # Hz for global path publishing
+
+    # Debug log level (0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=VERBOSE)
+    log_level: 1  # Default to ERROR only
+
+    # Position compensation settings
+    expected_computation_time: 0.01  # Expected computation time in seconds (10ms default)
+    adaptive_compensation: true  # Enable adaptive computation time estimation
+
+    # TODO: this is not used yet (seperate path)
+    csv_file_dir: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/"
+    csv_file_name: ""

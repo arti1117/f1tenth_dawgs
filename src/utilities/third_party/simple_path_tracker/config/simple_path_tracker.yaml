@@ -1,0 +1,25 @@
+simple_path_tracker:
+  ros__parameters:
+    # CSV file path - leave empty to subscribe to global_path topic
+    csv_file_path: ""  # e.g., "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/racetracks/track.csv"
+
+    # Frame IDs
+    frame_id: "map"
+    base_link_frame: "base_link"
+
+    # Input topics
+    odom_topic: "/odom"
+    scan_topic: "/scan"
+    global_path_topic: "/global_path"  # Subscribe to this if no CSV provided
+
+    # Output topic
+    local_path_topic: "/local_path"
+
+    # Path extraction parameters
+    lookahead_distance: 3.0   # meters - how far ahead to look
+    lookbehind_distance: 1.0  # meters - how far behind to include
+    local_path_points: 50     # number of points in local path
+    path_resolution: 0.1      # meters between path points
+
+    # Publishing rate
+    publish_rate: 20.0        # Hz - rate to publish local path
