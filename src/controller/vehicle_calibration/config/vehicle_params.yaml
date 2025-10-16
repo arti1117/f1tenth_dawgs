@@ -1,0 +1,46 @@
+# F1TENTH Vehicle Parameters Configuration
+# These parameters define the physical characteristics of the vehicle
+
+# Vehicle Dimensions
+wheelbase: 0.33          # Distance between front and rear axles (m)
+track_width: 0.30        # Distance between left and right wheels (m)
+wheel_radius: 0.05       # Radius of the wheels (m)
+vehicle_length: 0.50     # Total length of the vehicle (m)
+vehicle_width: 0.25      # Total width of the vehicle (m)
+vehicle_height: 0.15     # Total height of the vehicle (m)
+vehicle_mass: 4.3        # Mass of the vehicle (kg)
+
+# Drivetrain Parameters
+gear_ratio: 1.0          # Gear ratio between motor and wheels
+differential_ratio: 1.0  # Differential gear ratio
+motor_poles: 14          # Number of motor poles
+max_erpm: 20000         # Maximum ERPM limit
+
+# Steering Parameters
+max_steering_angle: 0.4  # Maximum steering angle (rad) ≈ 23 degrees
+min_steering_angle: -0.4 # Minimum steering angle (rad)
+steering_ratio: 1.0      # Steering gear ratio
+
+# Performance Limits
+max_speed: 6.0           # Maximum vehicle speed (m/s)
+max_acceleration: 4.0    # Maximum acceleration (m/s²)
+max_deceleration: -6.0   # Maximum deceleration (m/s²)
+max_lateral_acceleration: 8.0  # Maximum lateral acceleration (m/s²)
+
+# Friction Parameters
+mu_static: 0.9           # Static friction coefficient
+mu_kinetic: 0.8          # Kinetic friction coefficient
+tire_cornering_stiffness: 50.0  # Cornering stiffness (N/rad)
+
+# Sensor Parameters
+imu_frequency: 100       # IMU update frequency (Hz)
+odom_frequency: 50       # Odometry update frequency (Hz)
+lidar_frequency: 40      # LiDAR update frequency (Hz)
+
+# Control Parameters
+control_frequency: 100   # Control loop frequency (Hz)
+lookahead_distance: 1.0  # Lookahead distance for path following (m)
+steering_kp: 1.0         # Proportional gain for steering control
+speed_kp: 1.0           # Proportional gain for speed control
+speed_ki: 0.1           # Integral gain for speed control
+speed_kd: 0.05          # Derivative gain for speed control

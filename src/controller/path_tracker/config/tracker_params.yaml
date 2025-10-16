@@ -1,0 +1,40 @@
+path_tracker_node:
+  ros__parameters:
+    # Pure pursuit parameters
+    lookahead_base: 1.5         # Base lookahead distance [m]
+    lookahead_k: 0.3            # Speed-dependent lookahead gain
+    use_speed_lookahead: true   # Enable speed-dependent lookahead
+
+    # Vehicle parameters
+    wheelbase: 0.33             # Vehicle wheelbase [m]
+    default_speed: 2.0          # Default driving speed [m/s]
+    max_steering_angle: 0.4189  # Maximum steering angle [rad] (~24 degrees)
+
+    # Path tracking parameters
+    path_timeout: 1.0           # Path timeout [s] - stop if no new path received
+
+    # Speed control mode
+    # Options: "default", "path_velocity", "curvature", "optimize"
+    # - "default": Use default_speed parameter
+    # - "path_velocity": Use velocity from global_centerline path
+    # - "curvature": Calculate speed based on path curvature
+    # - "optimize": Use minimum of path_velocity, curvature, and steering_limit
+    speed_mode: "curvature"
+
+    # Curvature-based speed parameters (used when speed_mode = "curvature")
+    friction_coeff: 0.9         # Friction coefficient (mu) for lateral grip
+    max_speed_limit: 8.0        # Maximum speed limit [m/s]
+    min_speed_limit: 0.5        # Minimum speed limit [m/s]
+
+    # Steering-based speed limiting
+    use_steering_limit: true    # Enable steering-angle-based speed limiting
+    steering_lookup_table: "dawgs_lookup_table.csv"  # Lookup table file
+    package_share_dir: "/home/dawgs_nx/f1tenth_dawgs/src/controller/path_tracker/config"
+    max_lateral_accel: 9.81     # Maximum lateral acceleration [m/s^2] (default: 1g)
+
+    # Topics
+    odom_topic: "/odom"
+    drive_topic: "/drive"
+    path_topic: "/frenet_path"         # Subscribe to Frenet path from path planner
+    global_path_topic: "/global_centerline"  # Global path with velocity info (for path_velocity mode)
+    base_frame: "base_link"

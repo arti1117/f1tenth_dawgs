@@ -1,0 +1,5 @@
+# ERPM Gain Calibration Results
+# Generated: 2025-09-28 22:10:42
+erpm_gain: 4614
+r_squared: 1.0000
+rmse: 0.02

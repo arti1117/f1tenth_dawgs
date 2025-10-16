@@ -1,0 +1,54 @@
+# Calibration Parameters Configuration
+# These parameters control the calibration procedures
+
+# Common Parameters
+data_collection_rate: 50     # Data collection frequency (Hz)
+output_directory: "/home/dawgs_nx/f1tenth_dawgs/data/calibration"
+save_data: true             # Save calibration data to files
+plot_results: true          # Generate plots of calibration results
+
+# Friction Circle Test Parameters
+friction_circle:
+  min_speed: 0.5            # Minimum test speed (m/s)
+  max_speed: 3.0            # Maximum test speed (m/s)
+  speed_increment: 0.2      # Speed increment per test (m/s)
+  test_duration: 10.0       # Duration for each speed test (s)
+  max_lateral_accel: 8.0    # Safety limit for lateral acceleration (m/s²)
+  plot_real_time: true      # Enable real-time plotting
+  steering_frequency: 0.2   # Frequency of steering variation (Hz)
+  steering_amplitude: 0.8   # Amplitude factor for steering (0-1)
+
+# ERPM Calibration Parameters
+erpm_calibration:
+  min_speed: 0.5            # Minimum calibration speed (m/s)
+  max_speed: 4.0            # Maximum calibration speed (m/s)
+  speed_increment: 0.25     # Speed increment per test (m/s)
+  test_duration: 8.0        # Duration for each speed test (s)
+  settling_time: 2.0        # Time to let speed settle before recording (s)
+  initial_erpm_gain: 4000   # Initial ERPM gain estimate
+  max_erpm: 20000          # Maximum ERPM limit
+  tolerance: 0.05          # Speed tolerance for steady state (m/s)
+
+# Steering Calibration Parameters
+steering_calibration:
+  min_steering_angle: -0.4  # Minimum steering angle (rad)
+  max_steering_angle: 0.4   # Maximum steering angle (rad)
+  steering_increment: 0.05  # Steering increment per test (rad)
+  test_speed: 1.0          # Constant test speed (m/s)
+  test_duration: 12.0      # Duration for each steering test (s)
+  settling_time: 2.0       # Time to let steering settle (s)
+  min_turn_radius: 0.5     # Minimum valid turning radius (m)
+  max_turn_radius: 20.0    # Maximum valid turning radius (m)
+  initial_steering_gain: 1.0    # Initial steering gain estimate
+  initial_steering_offset: 0.0  # Initial steering offset (rad)
+  position_tolerance: 0.1  # Position tolerance for circle fitting (m)
+  min_arc_angle: 1.0      # Minimum arc angle for valid measurement (rad)
+  use_least_squares_circle: true  # Use least squares circle fitting
+
+# Quality Assessment Thresholds
+quality_thresholds:
+  excellent_r_squared: 0.95  # R² threshold for excellent calibration
+  good_r_squared: 0.90      # R² threshold for good calibration
+  fair_r_squared: 0.80      # R² threshold for fair calibration
+  max_acceptable_rmse_speed: 0.1     # Maximum RMSE for speed calibration (m/s)
+  max_acceptable_rmse_steering: 2.0   # Maximum RMSE for steering calibration (degrees)
