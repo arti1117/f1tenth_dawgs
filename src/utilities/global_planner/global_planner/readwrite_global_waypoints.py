@@ -15,6 +15,7 @@ from typing import Tuple, List, Dict
 
 
 def write_global_waypoints(map_dir: str,
+                           map_name: str,
                            map_info_str: str,
                            est_lap_time: Float32,
                            centerline_markers: MarkerArray,
@@ -27,6 +28,8 @@ def write_global_waypoints(map_dir: str,
                            ) -> None:
     '''
     Writes map information to a JSON file in the specified `map_dir` directory.
+    - map_dir: Directory to save the JSON file
+    - map_name: Name of the map (used for filename)
     - map_info_str
         - from topic /map_infos: python str
     - est_lap_time
@@ -48,7 +51,7 @@ def write_global_waypoints(map_dir: str,
     - write_path: Full path of JSON file to write
     '''
 
-    path = os.path.join(map_dir, 'global_waypoints.json')
+    path = os.path.join(map_dir, f'{map_name}_wp.json')
     print(f"[INFO] WRITE_GLOBAL_WAYPOINTS: Writing global waypoints to {path}")
 
     # Dictionary will be converted into a JSON for serialization
@@ -68,11 +71,18 @@ def write_global_waypoints(map_dir: str,
         json.dump(d, f)
 
 
-def read_global_waypoints(map_dir: str) -> Tuple[
+def read_global_waypoints(map_dir: str, map_name: str = None) -> Tuple[
     String, Float32, MarkerArray, WpntArray, MarkerArray, WpntArray, MarkerArray, WpntArray, MarkerArray
 ]:
     '''
     Reads map information from a JSON file with path specified `map_dir`.
+
+    Parameters
+    ----------
+    map_dir : str
+        Directory containing the JSON file
+    map_name : str, optional
+        Name of the map (used for filename). If None, tries 'global_waypoints.json' as fallback.
 
     Outputs Message objects as follows:
     - map_info_str
@@ -94,7 +104,14 @@ def read_global_waypoints(map_dir: str) -> Tuple[
     - trackbounds_markers
         - from topic /trackbounds/markers: MarkerArray
     '''
-    path = os.path.join(map_dir, 'global_waypoints.json')
+    # Try new naming convention first, fallback to old for backward compatibility
+    if map_name:
+        path = os.path.join(map_dir, f'{map_name}_wp.json')
+        if not os.path.exists(path):
+            # Fallback to old naming convention
+            path = os.path.join(map_dir, 'global_waypoints.json')
+    else:
+        path = os.path.join(map_dir, 'global_waypoints.json')
 
     print(f"[INFO] READ_GLOBAL_WAYPOINTS: Reading global waypoints from {path}")
     # Deserialize JSON and Reconstruct the maps elements
@@ -135,8 +152,10 @@ def read_global_waypoints(map_dir: str) -> Tuple[
 
 
 def write_waypoints_to_csv(map_dir: str,
+                           map_name: str,
                            global_traj_wpnts_iqp: WpntArray,
-                           global_traj_wpnts_sp: WpntArray) -> None:
+                           global_traj_wpnts_sp: WpntArray,
+                           centerline_waypoints: WpntArray = None) -> None:
     '''
     Write global waypoints to CSV files for path_planner usage.
 
@@ -145,22 +164,27 @@ def write_waypoints_to_csv(map_dir: str,
     - v: velocity in m/s
     - kappa: curvature in rad/m
 
-    Creates two CSV files:
-    - global_waypoints_iqp.csv: IQP optimized trajectory
-    - global_waypoints_sp.csv: Shortest path trajectory
+    Creates three CSV files:
+    - {map_name}_iqp.csv: IQP optimized trajectory
+    - {map_name}_sp.csv: Shortest path trajectory
+    - {map_name}_center.csv: Centerline trajectory (if provided)
 
     Parameters
     ----------
     map_dir : str
         Directory to save CSV files
+    map_name : str
+        Name of the map (used for filename)
     global_traj_wpnts_iqp : WpntArray
         IQP optimized waypoints
     global_traj_wpnts_sp : WpntArray
         Shortest path waypoints
+    centerline_waypoints : WpntArray, optional
+        Centerline waypoints
     '''
 
     # Write IQP trajectory to CSV
-    iqp_csv_path = os.path.join(map_dir, 'global_waypoints_iqp.csv')
+    iqp_csv_path = os.path.join(map_dir, f'{map_name}_iqp.csv')
     print(f"[INFO] WRITE_CSV: Writing IQP waypoints to {iqp_csv_path}")
 
     with open(iqp_csv_path, 'w', newline='') as f:
@@ -178,7 +202,7 @@ def write_waypoints_to_csv(map_dir: str,
     print(f"  ✓ Wrote {len(global_traj_wpnts_iqp.wpnts)} IQP waypoints")
 
     # Write shortest path trajectory to CSV
-    sp_csv_path = os.path.join(map_dir, 'global_waypoints_sp.csv')
+    sp_csv_path = os.path.join(map_dir, f'{map_name}_sp.csv')
     print(f"[INFO] WRITE_CSV: Writing SP waypoints to {sp_csv_path}")
 
     with open(sp_csv_path, 'w', newline='') as f:
@@ -195,6 +219,25 @@ def write_waypoints_to_csv(map_dir: str,
 
     print(f"  ✓ Wrote {len(global_traj_wpnts_sp.wpnts)} SP waypoints")
 
+    # Write centerline trajectory to CSV if provided
+    if centerline_waypoints is not None:
+        center_csv_path = os.path.join(map_dir, f'{map_name}_center.csv')
+        print(f"[INFO] WRITE_CSV: Writing centerline waypoints to {center_csv_path}")
+
+        with open(center_csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            # Write header
+            writer.writerow(['x', 'y', 'v', 'kappa'])
+
+            for wpnt in centerline_waypoints.wpnts:
+                x = wpnt.x_m
+                y = wpnt.y_m
+                v = wpnt.vx_mps
+                kappa = wpnt.kappa_radpm
+                writer.writerow([x, y, v, kappa])
+
+        print(f"  ✓ Wrote {len(centerline_waypoints.wpnts)} centerline waypoints")
+
     # Print summary statistics
     iqp_velocities = np.array([wpnt.vx_mps for wpnt in global_traj_wpnts_iqp.wpnts])
     sp_velocities = np.array([wpnt.vx_mps for wpnt in global_traj_wpnts_sp.wpnts])
@@ -208,3 +251,10 @@ def write_waypoints_to_csv(map_dir: str,
     print(f"    - Points: {len(global_traj_wpnts_sp.wpnts)}")
     print(f"    - Velocity range: [{np.min(sp_velocities):.2f}, {np.max(sp_velocities):.2f}] m/s")
     print(f"    - Average velocity: {np.mean(sp_velocities):.2f} m/s")
+
+    if centerline_waypoints is not None:
+        center_velocities = np.array([wpnt.vx_mps for wpnt in centerline_waypoints.wpnts])
+        print(f"  Centerline trajectory:")
+        print(f"    - Points: {len(centerline_waypoints.wpnts)}")
+        print(f"    - Velocity range: [{np.min(center_velocities):.2f}, {np.max(center_velocities):.2f}] m/s")
+        print(f"    - Average velocity: {np.mean(center_velocities):.2f} m/s")

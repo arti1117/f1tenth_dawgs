@@ -9,10 +9,23 @@ from launch.actions import IncludeLaunchDescription
 def generate_launch_description():
     ld = LaunchDescription()
 
+    mapping_config = os.path.join(
+        get_package_share_directory('agent_dawgs'),
+        'config',
+        'dawgs',
+        'mapping_vesc.yaml'
+    )
+
     f1tenth_system_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('f1tenth_stack'), 'launch', 'bringup_launch.py')
-        )
+            os.path.join(
+                get_package_share_directory('f1tenth_stack'),
+                'launch',
+                'bringup_launch.py')
+        ),
+        launch_arguments={
+            'vesc_config': mapping_config
+        }.items()
     )
 
     ekf_launch = IncludeLaunchDescription(

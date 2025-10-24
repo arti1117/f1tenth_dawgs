@@ -1,0 +1,7 @@
+image: /home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map.pgm
+mode: trinary
+resolution: 0.05
+origin: [-12.7, -7.16, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25

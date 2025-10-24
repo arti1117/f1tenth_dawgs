@@ -45,6 +45,15 @@ namespace f1tenth
         double safety_radius{0.3};
         double road_half_width{1.0};
         LogLevel log_level{LogLevel::ERROR};  // Default to ERROR only
+
+        // Enhanced safety parameters
+        double vehicle_radius{0.2};           // Vehicle footprint radius [m]
+        double obstacle_radius{0.15};         // Expected obstacle radius [m]
+        double k_velocity_safety{0.15};       // Velocity-dependent safety gain (s = base + k*v)
+        double min_safety_margin{0.25};       // Minimum safety margin [m]
+        double k_proximity{0.5};              // Proximity cost weight
+        double proximity_threshold{1.5};      // Distance threshold for proximity cost [m]
+        int interpolation_checks{3};          // Number of intermediate collision checks between samples
     };
 
     // KD-tree wrapper for nanoflann

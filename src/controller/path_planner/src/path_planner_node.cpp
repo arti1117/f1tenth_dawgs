@@ -66,24 +66,51 @@ public:
         declare_parameter<double>("frenet_safety_radius", 0.3);
         declare_parameter<double>("frenet_road_half_width", 1.2);
 
+        // Enhanced safety parameters
+        declare_parameter<double>("frenet_vehicle_radius", 0.2);
+        declare_parameter<double>("frenet_obstacle_radius", 0.15);
+        declare_parameter<double>("frenet_k_velocity_safety", 0.15);
+        declare_parameter<double>("frenet_min_safety_margin", 0.25);
+        declare_parameter<double>("frenet_k_proximity", 0.5);
+        declare_parameter<double>("frenet_proximity_threshold", 1.5);
+        declare_parameter<int>("frenet_interpolation_checks", 3);
 
 
-        sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(get_parameter("odom_topic").as_string(), 30,
+
+        // QoS for sensor data: Best Effort for low latency
+        auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(5));
+        sensor_qos.best_effort();
+
+        // QoS for path data: Reliable for data integrity
+        auto path_qos = rclcpp::QoS(rclcpp::KeepLast(10));
+        path_qos.reliable();
+
+        // QoS for visualization: Best Effort, small buffer
+        auto viz_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+        viz_qos.best_effort();
+
+        sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(get_parameter("odom_topic").as_string(), sensor_qos,
         std::bind(&PathPlannerNode::odomCallback, this, _1));
 
-        sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(get_parameter("scan_topic").as_string(), 30,
+        sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(get_parameter("scan_topic").as_string(), sensor_qos,
         std::bind(&PathPlannerNode::scanCallback, this, _1));
 
         // Publishers
-        pub_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("planned_path_topic").as_string(),10);
-        pub_global_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("global_path_topic").as_string(),10);
+        pub_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("planned_path_topic").as_string(), path_qos);
+        pub_global_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("global_path_topic").as_string(), path_qos);
 
         // Visualization publishers
         if (get_parameter("visualize_paths").as_bool()) {
-            pub_frenet_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("frenet_path_topic").as_string(),10);
-            pub_lut_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("lut_path_topic").as_string(),10);
-            pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/path_planner_markers",10);
+            pub_frenet_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("frenet_path_topic").as_string(), path_qos);
+            pub_lut_path_ = create_publisher<nav_msgs::msg::Path>(get_parameter("lut_path_topic").as_string(), path_qos);
+            pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/path_planner_markers", viz_qos);
         }
+
+        // Global path velocity visualization publisher
+        pub_velocity_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/global_path_velocity_markers", viz_qos);
+
+        // Frenet path velocity visualization publisher
+        pub_frenet_velocity_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/frenet_path_velocity_markers", viz_qos);
 
         // init planners with parameters from config
         f1tenth::FrenetParams fp;
@@ -102,6 +129,16 @@ public:
         fp.safety_radius = get_parameter("frenet_safety_radius").as_double();
         fp.road_half_width = get_parameter("frenet_road_half_width").as_double();
         fp.log_level = static_cast<f1tenth::LogLevel>(get_parameter("log_level").as_int());
+
+        // Enhanced safety parameters
+        fp.vehicle_radius = get_parameter("frenet_vehicle_radius").as_double();
+        fp.obstacle_radius = get_parameter("frenet_obstacle_radius").as_double();
+        fp.k_velocity_safety = get_parameter("frenet_k_velocity_safety").as_double();
+        fp.min_safety_margin = get_parameter("frenet_min_safety_margin").as_double();
+        fp.k_proximity = get_parameter("frenet_k_proximity").as_double();
+        fp.proximity_threshold = get_parameter("frenet_proximity_threshold").as_double();
+        fp.interpolation_checks = get_parameter("frenet_interpolation_checks").as_int();
+
         frenet_ = std::make_unique<f1tenth::FrenetPlanner>(fp);
 
 
@@ -328,7 +365,86 @@ private:
                 pose.header.stamp = ref_path_.header.stamp;
             }
             pub_global_path_->publish(ref_path_);
+
+            // Visualize velocity with color-coded markers
+            visualizeGlobalPathVelocity();
         }
+    }
+
+    void visualizeGlobalPathVelocity()
+    {
+        if (ref_path_.poses.empty()) return;
+
+        visualization_msgs::msg::MarkerArray marker_array;
+
+        // Clear previous markers
+        visualization_msgs::msg::Marker clear_marker;
+        clear_marker.header.frame_id = get_parameter("frame_id").as_string();
+        clear_marker.header.stamp = now();
+        clear_marker.ns = "global_path_velocity";
+        clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_array.markers.push_back(clear_marker);
+
+        // Find min and max velocity for color mapping
+        double min_vel = std::numeric_limits<double>::max();
+        double max_vel = std::numeric_limits<double>::min();
+        for (const auto& pose : ref_path_.poses) {
+            double vel = pose.pose.position.z;  // velocity stored in z
+            min_vel = std::min(min_vel, vel);
+            max_vel = std::max(max_vel, vel);
+        }
+
+        // Create line segments with color gradient
+        for (size_t i = 0; i < ref_path_.poses.size() - 1; ++i) {
+            visualization_msgs::msg::Marker line_marker;
+            line_marker.header.frame_id = get_parameter("frame_id").as_string();
+            line_marker.header.stamp = now();
+            line_marker.ns = "global_path_velocity";
+            line_marker.id = i;
+            line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+            line_marker.action = visualization_msgs::msg::Marker::ADD;
+            line_marker.scale.x = 0.15;  // Line width
+            line_marker.pose.orientation.w = 1.0;
+
+            // Get velocities and normalize
+            double vel1 = ref_path_.poses[i].pose.position.z;
+            double vel2 = ref_path_.poses[i + 1].pose.position.z;
+            double avg_vel = (vel1 + vel2) / 2.0;
+
+            // Normalize velocity to [0, 1]
+            double vel_ratio = (max_vel > min_vel) ?
+                (avg_vel - min_vel) / (max_vel - min_vel) : 0.5;
+
+            // Color gradient: Blue (slow) -> Green (medium) -> Red (fast)
+            if (vel_ratio < 0.5) {
+                // Blue to Green
+                line_marker.color.r = 0.0;
+                line_marker.color.g = vel_ratio * 2.0;
+                line_marker.color.b = 1.0 - vel_ratio * 2.0;
+            } else {
+                // Green to Red
+                line_marker.color.r = (vel_ratio - 0.5) * 2.0;
+                line_marker.color.g = 1.0 - (vel_ratio - 0.5) * 2.0;
+                line_marker.color.b = 0.0;
+            }
+            line_marker.color.a = 0.8;
+
+            // Add two points for the line segment (at track level, z=0)
+            geometry_msgs::msg::Point p1, p2;
+            p1.x = ref_path_.poses[i].pose.position.x;
+            p1.y = ref_path_.poses[i].pose.position.y;
+            p1.z = 0.0;  // Track level
+            p2.x = ref_path_.poses[i + 1].pose.position.x;
+            p2.y = ref_path_.poses[i + 1].pose.position.y;
+            p2.z = 0.0;  // Track level
+
+            line_marker.points.push_back(p1);
+            line_marker.points.push_back(p2);
+
+            marker_array.markers.push_back(line_marker);
+        }
+
+        pub_velocity_markers_->publish(marker_array);
     }
 
 
@@ -501,6 +617,7 @@ private:
         // Visualize Frenet path if enabled
         if (get_parameter("visualize_paths").as_bool() && best_frenet) {
             visualizeFrenetPath(*best_frenet);
+            visualizeFrenetPathVelocity(*best_frenet);  // Color-coded velocity visualization
         }
 
 
@@ -610,6 +727,76 @@ private:
     }
 
 
+    // Helper function: Get velocity from global path at given s coordinate
+    double getVelocityAtS(double s_query) const
+    {
+        if (ref_path_.poses.empty()) {
+            return 0.0;
+        }
+
+        // Calculate accumulated s for each waypoint in ref_path_
+        std::vector<double> s_values;
+        s_values.push_back(0.0);
+        double accumulated_s = 0.0;
+
+        for (size_t i = 1; i < ref_path_.poses.size(); ++i) {
+            double dx = ref_path_.poses[i].pose.position.x - ref_path_.poses[i-1].pose.position.x;
+            double dy = ref_path_.poses[i].pose.position.y - ref_path_.poses[i-1].pose.position.y;
+            accumulated_s += std::hypot(dx, dy);
+            s_values.push_back(accumulated_s);
+        }
+
+        double total_length = accumulated_s;
+
+        // Handle closed loop (wrap s coordinate)
+        if (ref_path_.poses.size() >= 2) {
+            double dx = ref_path_.poses[0].pose.position.x - ref_path_.poses.back().pose.position.x;
+            double dy = ref_path_.poses[0].pose.position.y - ref_path_.poses.back().pose.position.y;
+            double closing_distance = std::hypot(dx, dy);
+
+            if (closing_distance < 2.0) {
+                // Closed loop detected
+                total_length += closing_distance;
+
+                // Wrap s_query to [0, total_length)
+                while (s_query < 0) s_query += total_length;
+                while (s_query >= total_length) s_query -= total_length;
+            }
+        }
+
+        // Find the two closest waypoints for interpolation
+        size_t lower_idx = 0;
+        for (size_t i = 0; i < s_values.size(); ++i) {
+            if (s_values[i] <= s_query) {
+                lower_idx = i;
+            } else {
+                break;
+            }
+        }
+
+        // Handle edge cases
+        if (lower_idx >= ref_path_.poses.size() - 1) {
+            // At or beyond last waypoint
+            return ref_path_.poses.back().pose.position.z;
+        }
+
+        // Linear interpolation
+        size_t upper_idx = lower_idx + 1;
+        double s_lower = s_values[lower_idx];
+        double s_upper = s_values[upper_idx];
+        double v_lower = ref_path_.poses[lower_idx].pose.position.z;
+        double v_upper = ref_path_.poses[upper_idx].pose.position.z;
+
+        if (std::abs(s_upper - s_lower) < 1e-6) {
+            return v_lower;
+        }
+
+        double t = (s_query - s_lower) / (s_upper - s_lower);
+        t = std::max(0.0, std::min(1.0, t));  // Clamp to [0, 1]
+
+        return v_lower + t * (v_upper - v_lower);
+    }
+
     void visualizeFrenetPath(const f1tenth::FrenetTraj& path)
     {
         nav_msgs::msg::Path frenet_msg;
@@ -621,7 +808,13 @@ private:
             pose.header = frenet_msg.header;
             pose.pose.position.x = path.x[i];
             pose.pose.position.y = path.y[i];
-            pose.pose.position.z = 0.1; // Slightly elevated for visibility
+
+            // Get velocity from global path at the same s coordinate
+            double s_coord = (i < path.s.size()) ? path.s[i] : 0.0;
+            double velocity = getVelocityAtS(s_coord);
+
+            // Store velocity in z component for path_tracker to use
+            pose.pose.position.z = velocity;
 
             double yaw = path.yaw[i];
             pose.pose.orientation.z = std::sin(yaw / 2.0);
@@ -631,6 +824,83 @@ private:
         }
 
         pub_frenet_path_->publish(frenet_msg);
+    }
+
+    void visualizeFrenetPathVelocity(const f1tenth::FrenetTraj& path)
+    {
+        if (path.x.size() < 2) return;
+
+        visualization_msgs::msg::MarkerArray marker_array;
+
+        // Clear previous markers
+        visualization_msgs::msg::Marker clear_marker;
+        clear_marker.header.frame_id = get_parameter("frame_id").as_string();
+        clear_marker.header.stamp = now();
+        clear_marker.ns = "frenet_path_velocity";
+        clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_array.markers.push_back(clear_marker);
+
+        // Get velocities from global path at corresponding s coordinates
+        std::vector<double> velocities;
+        for (size_t i = 0; i < path.x.size(); ++i) {
+            double s_coord = (i < path.s.size()) ? path.s[i] : 0.0;
+            double velocity = getVelocityAtS(s_coord);
+            velocities.push_back(velocity);
+        }
+
+        // Find min and max velocity for color mapping
+        double min_vel = *std::min_element(velocities.begin(), velocities.end());
+        double max_vel = *std::max_element(velocities.begin(), velocities.end());
+
+        // Create line segments with color gradient
+        for (size_t i = 0; i < path.x.size() - 1; ++i) {
+            visualization_msgs::msg::Marker line_marker;
+            line_marker.header.frame_id = get_parameter("frame_id").as_string();
+            line_marker.header.stamp = now();
+            line_marker.ns = "frenet_path_velocity";
+            line_marker.id = i;
+            line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+            line_marker.action = visualization_msgs::msg::Marker::ADD;
+            line_marker.scale.x = 0.12;  // Line width (slightly thinner than global path)
+            line_marker.pose.orientation.w = 1.0;
+
+            // Average velocity of the segment
+            double avg_vel = (velocities[i] + velocities[i + 1]) / 2.0;
+
+            // Normalize velocity to [0, 1]
+            double vel_ratio = (max_vel > min_vel) ?
+                (avg_vel - min_vel) / (max_vel - min_vel) : 0.5;
+
+            // Color gradient: Blue (slow) -> Green (medium) -> Red (fast)
+            if (vel_ratio < 0.5) {
+                // Blue to Green
+                line_marker.color.r = 0.0;
+                line_marker.color.g = vel_ratio * 2.0;
+                line_marker.color.b = 1.0 - vel_ratio * 2.0;
+            } else {
+                // Green to Red
+                line_marker.color.r = (vel_ratio - 0.5) * 2.0;
+                line_marker.color.g = 1.0 - (vel_ratio - 0.5) * 2.0;
+                line_marker.color.b = 0.0;
+            }
+            line_marker.color.a = 0.9;  // Slightly more opaque than global path
+
+            // Add two points for the line segment (slightly elevated for visibility)
+            geometry_msgs::msg::Point p1, p2;
+            p1.x = path.x[i];
+            p1.y = path.y[i];
+            p1.z = 0.05;  // Slightly above track level
+            p2.x = path.x[i + 1];
+            p2.y = path.y[i + 1];
+            p2.z = 0.05;  // Slightly above track level
+
+            line_marker.points.push_back(p1);
+            line_marker.points.push_back(p2);
+
+            marker_array.markers.push_back(line_marker);
+        }
+
+        pub_frenet_velocity_markers_->publish(marker_array);
     }
 
     void visualizeLUTPath(const std::vector<f1tenth::Waypoint>& path)
@@ -644,7 +914,9 @@ private:
             pose.header = lut_msg.header;
             pose.pose.position.x = wp.x;
             pose.pose.position.y = wp.y;
-            pose.pose.position.z = 0.15; // Different elevation than Frenet
+
+            // Store velocity in z component for path_tracker to use
+            pose.pose.position.z = wp.v;
 
             pose.pose.orientation.z = std::sin(wp.yaw / 2.0);
             pose.pose.orientation.w = std::cos(wp.yaw / 2.0);
@@ -725,6 +997,8 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_frenet_path_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_lut_path_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_velocity_markers_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_frenet_velocity_markers_;
 
 
     nav_msgs::msg::Path ref_path_;

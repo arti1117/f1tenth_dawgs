@@ -53,13 +53,17 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
   steering_to_servo_gain_ = declare_parameter("steering_angle_to_servo_gain").get<double>();
   steering_to_servo_offset_ = declare_parameter("steering_angle_to_servo_offset").get<double>();
 
-  // create publishers to vesc electric-RPM (speed) and servo commands
-  erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
-  servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
+  // QoS for control commands: Best Effort for real-time response
+  auto control_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+  control_qos.best_effort();
 
-  // subscribe to ackermann topic
+  // create publishers to vesc electric-RPM (speed) and servo commands
+  erpm_pub_ = create_publisher<Float64>("commands/motor/speed", control_qos);
+  servo_pub_ = create_publisher<Float64>("commands/servo/position", control_qos);
+
+  // subscribe to ackermann topic with real-time QoS
   ackermann_sub_ = create_subscription<AckermannDriveStamped>(
-    "ackermann_cmd", 10, std::bind(&AckermannToVesc::ackermannCmdCallback, this, _1));
+    "ackermann_cmd", control_qos, std::bind(&AckermannToVesc::ackermannCmdCallback, this, _1));
 }
 
 void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd)

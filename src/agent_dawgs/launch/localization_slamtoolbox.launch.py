@@ -9,8 +9,7 @@ from launch.actions import (DeclareLaunchArgument, EmitEvent, IncludeLaunchDescr
 from launch.conditions import IfCondition
 from launch.events import matches_action
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import (AndSubstitution, LaunchConfiguration,
-                                  NotSubstitution)
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -21,6 +20,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     use_rviz = LaunchConfiguration('use_rviz', default='true')
     use_bringup = LaunchConfiguration('use_bringup', default='true')
+    use_ekf = LaunchConfiguration('use_ekf', default='true')
     use_lifecycle_manager = LaunchConfiguration("use_lifecycle_manager")
     slam_params_file = LaunchConfiguration('slam_params_file')
     autostart = LaunchConfiguration('autostart')
@@ -29,28 +29,37 @@ def generate_launch_description():
     f1tenth_stack_prefix = get_package_share_directory('f1tenth_stack')
     rviz_config_dir = os.path.join(agent_dawgs_prefix, 'rviz', 'cartographer_dawgs.rviz')
 
-    # F1TENTH bringup launch
+    # F1TENTH bringup launch (without static map->odom for localization)
     bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(f1tenth_stack_prefix, 'launch', 'bringup_launch.py')
         ]),
+        launch_arguments={'publish_map_odom_tf': 'false'}.items(),
         condition=IfCondition(use_bringup)
+    )
+
+    # EKF launch for odometry/filtered
+    ekf_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            os.path.join(agent_dawgs_prefix, 'launch', 'ekf_launch.py')
+        ]),
+        condition=IfCondition(use_ekf)
     )
 
     # Map file configuration
     DeclareLaunchArgument(
         'map_directory',
-        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon'
+        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun'
     ),
     DeclareLaunchArgument(
         'map_name',
-        default_value='icheon1009_map'
+        default_value='mohyun_1016_map'
     ),
     map_directory = LaunchConfiguration('map_directory')
     map_name = LaunchConfiguration('map_name')
 
     yaml_file = LaunchConfiguration('yaml_file',
-        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map.yaml'),
+        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map.yaml'),
 
     declare_use_sim_time_argument = DeclareLaunchArgument(
         'use_sim_time',
@@ -66,6 +75,11 @@ def generate_launch_description():
         'use_bringup',
         default_value='true',
         description='Launch F1TENTH hardware bringup')
+
+    declare_use_ekf_argument = DeclareLaunchArgument(
+        'use_ekf',
+        default_value='true',
+        description='Launch EKF for odometry filtering')
 
     declare_slam_params_file_cmd = DeclareLaunchArgument(
         'slam_params_file',
@@ -95,19 +109,18 @@ def generate_launch_description():
         executable='localization_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        namespace='',
-        remappings=[
+        namespace=''
+        ,remappings=[
             ('odom', 'odometry/filtered'),
         ],
     )
 
-    # Lifecycle events for SLAM Toolbox
+    # Lifecycle events for SLAM Toolbox - simplified for ROS2 Foxy compatibility
     configure_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(start_localization_slam_toolbox_node),
             transition_id=Transition.TRANSITION_CONFIGURE
-        ),
-        condition=IfCondition(AndSubstitution(autostart, NotSubstitution(use_lifecycle_manager)))
+        )
     )
 
     activate_event = RegisterEventHandler(
@@ -122,8 +135,7 @@ def generate_launch_description():
                     transition_id=Transition.TRANSITION_ACTIVATE
                 ))
             ]
-        ),
-        condition=IfCondition(AndSubstitution(autostart, NotSubstitution(use_lifecycle_manager)))
+        )
     )
 
     # Map server node
@@ -166,12 +178,16 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_argument)
     ld.add_action(declare_use_rviz_argument)
     ld.add_action(declare_use_bringup_argument)
+    ld.add_action(declare_use_ekf_argument)
     ld.add_action(declare_slam_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_lifecycle_manager)
 
     # F1TENTH hardware bringup
     ld.add_action(bringup_launch)
+
+    # EKF for odometry filtering
+    ld.add_action(ekf_launch)
 
     # Nodes
     ld.add_action(start_localization_slam_toolbox_node)

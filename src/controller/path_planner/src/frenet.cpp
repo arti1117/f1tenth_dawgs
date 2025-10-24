@@ -482,16 +482,84 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                 tr.v.push_back(s_dot);  // Store longitudinal velocity
             }
 
-            // === Collision check ===
+            // === Enhanced Collision Check ===
+            double proximity_cost = 0.0;  // Initialize proximity cost
+
             if (tr.x.size() > 1) {
                 for (size_t i = 0; i < tr.x.size(); ++i) {
+                    // Velocity-dependent safety margin
+                    // safety_margin = base + vehicle_r + obstacle_r + k_v * velocity
+                    double current_velocity = (i < tr.v.size()) ? tr.v[i] : p_.target_speed;
+                    double dynamic_safety = std::max(p_.min_safety_margin,
+                                                     p_.safety_radius + p_.vehicle_radius + p_.obstacle_radius +
+                                                     p_.k_velocity_safety * current_velocity);
+
+                    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Point " << i << ": v=" << current_velocity
+                              << " m/s, safety=" << dynamic_safety << " m");
+
+                    // Check collision with obstacles
                     for (const auto &ob : obstacles) {
-                        if (distance(tr.x[i], tr.y[i], ob.first, ob.second) < p_.safety_radius) {
+                        double dist = distance(tr.x[i], tr.y[i], ob.first, ob.second);
+
+                        // Hard collision check
+                        if (dist < dynamic_safety) {
                             tr.collision = true;
+                            FRENET_LOG(LogLevel::DEBUG, "[Frenet] COLLISION at point " << i
+                                      << ": dist=" << dist << " < safety=" << dynamic_safety);
                             break;
                         }
+
+                        // Proximity cost (soft penalty for being close to obstacles)
+                        if (dist < p_.proximity_threshold) {
+                            double margin = dist - dynamic_safety;
+                            if (margin > 0) {
+                                // Add inverse distance cost (higher cost when closer)
+                                proximity_cost += 1.0 / (margin + 0.1);
+                            }
+                        }
                     }
-                    if (std::abs(tr.d[i]) > p_.road_half_width) { tr.collision = true; break; }
+
+                    // Road boundary check
+                    if (std::abs(tr.d[i]) > p_.road_half_width) {
+                        tr.collision = true;
+                        FRENET_LOG(LogLevel::DEBUG, "[Frenet] OUT OF BOUNDS at point " << i
+                                  << ": d=" << tr.d[i] << " > width=" << p_.road_half_width);
+                        break;
+                    }
+
+                    if (tr.collision) break;
+
+                    // Interpolation check (check intermediate points between samples)
+                    if (i > 0 && p_.interpolation_checks > 0) {
+                        for (int j = 1; j <= p_.interpolation_checks; ++j) {
+                            double t_interp = static_cast<double>(j) / (p_.interpolation_checks + 1);
+                            double x_interp = tr.x[i-1] + t_interp * (tr.x[i] - tr.x[i-1]);
+                            double y_interp = tr.y[i-1] + t_interp * (tr.y[i] - tr.y[i-1]);
+                            double d_interp = tr.d[i-1] + t_interp * (tr.d[i] - tr.d[i-1]);
+
+                            // Check interpolated points
+                            for (const auto &ob : obstacles) {
+                                double dist_interp = distance(x_interp, y_interp, ob.first, ob.second);
+                                if (dist_interp < dynamic_safety) {
+                                    tr.collision = true;
+                                    FRENET_LOG(LogLevel::DEBUG, "[Frenet] INTERPOLATED COLLISION between points "
+                                              << (i-1) << "-" << i << ", interp " << j);
+                                    break;
+                                }
+                            }
+
+                            // Road boundary for interpolated points
+                            if (std::abs(d_interp) > p_.road_half_width) {
+                                tr.collision = true;
+                                FRENET_LOG(LogLevel::DEBUG, "[Frenet] INTERPOLATED OUT OF BOUNDS: d="
+                                          << d_interp);
+                                break;
+                            }
+
+                            if (tr.collision) break;
+                        }
+                    }
+
                     if (tr.collision) break;
                 }
             }
@@ -506,8 +574,17 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                     [](double a, double b){ return a + std::abs(b); }) / tr.d.size();
                 double v_err = 0.0;  // optional
 
-                tr.cost = p_.k_j * j_lat + p_.k_t * T + p_.k_d * dev + p_.k_v * v_err;
+                // Total cost with proximity penalty
+                tr.cost = p_.k_j * j_lat + p_.k_t * T + p_.k_d * dev + p_.k_v * v_err +
+                          p_.k_proximity * proximity_cost;
+
+                FRENET_LOG(LogLevel::DEBUG, "[Frenet] Trajectory cost: jerk=" << j_lat
+                          << ", time=" << T << ", dev=" << dev << ", proximity=" << proximity_cost
+                          << " → total=" << tr.cost);
+
                 cands.push_back(std::move(tr));
+            } else if (tr.collision) {
+                FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Trajectory rejected due to collision");
             }
         }
     }

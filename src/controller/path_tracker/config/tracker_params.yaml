@@ -5,6 +5,22 @@ path_tracker_node:
     lookahead_k: 0.3            # Speed-dependent lookahead gain
     use_speed_lookahead: true   # Enable speed-dependent lookahead
 
+    # Adaptive lookahead parameters
+    use_adaptive_lookahead: true  # Enable curvature and error-based lookahead adjustment
+    lookahead_min: 0.5           # Minimum lookahead distance [m]
+    lookahead_max: 3.0           # Maximum lookahead distance [m]
+    k_curvature: 0.5             # Curvature-based lookahead gain (L += k_curv / |kappa|)
+    k_error: 0.3                 # Lateral error-based lookahead gain (L -= k_e * |e_y|)
+    curvature_epsilon: 0.001     # Small value to avoid division by zero in curvature
+
+    # Stanley controller parameters (for cutting suppression)
+    use_stanley: true            # Enable Stanley term addition to Pure Pursuit
+    stanley_k: 0.7               # Stanley gain for lateral error correction
+
+    # Steering filter parameters (for smooth control)
+    use_steering_filter: true    # Enable low-pass filter on steering commands
+    steering_alpha: 0.3          # Filter coefficient (0-1): higher = more responsive, lower = smoother
+
     # Vehicle parameters
     wheelbase: 0.33             # Vehicle wheelbase [m]
     default_speed: 2.0          # Default driving speed [m/s]
@@ -13,24 +29,29 @@ path_tracker_node:
     # Path tracking parameters
     path_timeout: 1.0           # Path timeout [s] - stop if no new path received
 
+    # Debug mode parameters
+    debug_mode: true            # Enable debug mode with verbose logging
+    velocity_gain: 0.8          # Velocity scaling factor [0.0-1.0] for debugging (1.0 = full speed)
+    debug_min_speed: 0.5        # Minimum speed in debug mode [m/s] (overrides min_speed_limit)
+
     # Speed control mode
     # Options: "default", "path_velocity", "curvature", "optimize"
     # - "default": Use default_speed parameter
     # - "path_velocity": Use velocity from global_centerline path
     # - "curvature": Calculate speed based on path curvature
-    # - "optimize": Use minimum of path_velocity, curvature, and steering_limit
-    speed_mode: "curvature"
+    # - "optimize": Use minimum of path_velocity, curvature, and friction limit
+    speed_mode: "path_velocity"
 
     # Curvature-based speed parameters (used when speed_mode = "curvature")
     friction_coeff: 0.9         # Friction coefficient (mu) for lateral grip
     max_speed_limit: 8.0        # Maximum speed limit [m/s]
     min_speed_limit: 0.5        # Minimum speed limit [m/s]
 
-    # Steering-based speed limiting
-    use_steering_limit: true    # Enable steering-angle-based speed limiting
-    steering_lookup_table: "dawgs_lookup_table.csv"  # Lookup table file
+    # Acceleration limiting (friction circle based)
+    use_acceleration_limit: true    # Enable friction circle acceleration limiting
+    lateral_accel_lookup_table: "dawgs_lookup_table.csv"  # Lateral acceleration lookup table
     package_share_dir: "/home/dawgs_nx/f1tenth_dawgs/src/controller/path_tracker/config"
-    max_lateral_accel: 9.81     # Maximum lateral acceleration [m/s^2] (default: 1g)
+    max_total_acceleration: 12.0    # Maximum total acceleration (friction circle limit) [m/s^2] (1g default)
 
     # Topics
     odom_topic: "/odom"

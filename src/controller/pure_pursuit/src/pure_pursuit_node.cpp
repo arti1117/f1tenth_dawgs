@@ -47,16 +47,34 @@ PurePursuitNode::PurePursuitNode() : Node("pure_pursuit") {
     drive_topic_ = this->get_parameter("drive_topic").as_string();
     lap_topic_ = this->get_parameter("lap_time_topic").as_string();
 
-    // publishers/subscribers
-    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        odom_topic_, 50, std::bind(&PurePursuitNode::odomCallback, this, std::placeholders::_1));
-    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic_, 10);
-    lap_pub_ = this->create_publisher<std_msgs::msg::Float64>(lap_topic_, 10);
+    // QoS for sensor data: Best Effort for low latency
+    auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(5));
+    sensor_qos.best_effort();
 
-    wp_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(wp_topic_, 10);
-    str_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(str_topic_, 10);
-    wp_near_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(wp_near_topic_, 10);
-    wp_ahead_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(wp_ahead_topic_, 10);
+    // QoS for control commands: Best Effort for real-time response
+    auto control_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    control_qos.best_effort();
+
+    // QoS for lap time data: Reliable for data integrity
+    auto data_qos = rclcpp::QoS(rclcpp::KeepLast(10));
+    data_qos.reliable();
+
+    // QoS for visualization: Best Effort, small buffer
+    auto viz_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    viz_qos.best_effort();
+
+    // Subscribers
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        odom_topic_, sensor_qos, std::bind(&PurePursuitNode::odomCallback, this, std::placeholders::_1));
+
+    // Publishers
+    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic_, control_qos);
+    lap_pub_ = this->create_publisher<std_msgs::msg::Float64>(lap_topic_, data_qos);
+
+    wp_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(wp_topic_, viz_qos);
+    str_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(str_topic_, viz_qos);
+    wp_near_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(wp_near_topic_, viz_qos);
+    wp_ahead_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(wp_ahead_topic_, viz_qos);
 
     // load waypoints
     if (!loadWaypointsCSV(waypoint_file_)) {

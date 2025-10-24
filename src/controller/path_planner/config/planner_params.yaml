@@ -6,21 +6,10 @@ path_planner_node:
     # Pre-conditions
     #   - check base_system(f1tenth) map
     #   - run speedopt or global_planner_offline
-    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_gw_iqp.csv"
+    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map_iqp.csv"
     # "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_lippboyd_speedopted.csv"
 
 
-
-    # Topics
-    odom_topic: "/odom"
-    scan_topic: "/scan"
-    planned_path_topic: "/planned_path"
-    global_path_topic: "/global_centerline"  # Published if CSV loaded
-    frenet_path_topic: "/frenet_path"
-    lut_path_topic: "/lut_path"
-
-    # Frame
-    frame_id: "map"
 
     # Planner settings
     use_lattice: true
@@ -48,8 +37,17 @@ path_planner_node:
     frenet_k_velocity: 1.0   # Velocity error weight
 
     # Safety parameters
-    frenet_safety_radius: 0.3     # Safety radius around obstacles [m]
+    frenet_safety_radius: 0.9     # Base safety radius around obstacles [m]
     frenet_road_half_width: 1.2   # Half width of drivable area [m]
+
+    # Enhanced safety parameters
+    frenet_vehicle_radius: 0.5           # Vehicle footprint radius [m]
+    frenet_obstacle_radius: 0.5          # Expected obstacle radius [m]
+    frenet_k_velocity_safety: 0.15       # Velocity-dependent safety gain (safety = base + k*v) [s]
+    frenet_min_safety_margin: 0.25       # Minimum safety margin [m]
+    frenet_k_proximity: 0.5              # Proximity cost weight (penalize paths near obstacles)
+    frenet_proximity_threshold: 1.5      # Distance threshold for proximity cost [m]
+    frenet_interpolation_checks: 3       # Number of intermediate collision checks between samples
 
     # Visualization
     visualize_paths: true
@@ -61,6 +59,17 @@ path_planner_node:
     # Position compensation settings
     expected_computation_time: 0.01  # Expected computation time in seconds (10ms default)
     adaptive_compensation: true  # Enable adaptive computation time estimation
+
+    # Topics
+    odom_topic: "/odom"
+    scan_topic: "/scan"
+    planned_path_topic: "/planned_path"
+    global_path_topic: "/global_centerline"  # Published if CSV loaded
+    frenet_path_topic: "/frenet_path"
+    lut_path_topic: "/lut_path"
+
+    # Frame
+    frame_id: "map"
 
     # TODO: this is not used yet (seperate path)
     csv_file_dir: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/"

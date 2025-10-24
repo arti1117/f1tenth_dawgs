@@ -16,6 +16,27 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     this->declare_parameter<double>("path_timeout", 1.0);
     this->declare_parameter<bool>("use_speed_lookahead", true);
 
+    // Adaptive lookahead parameters
+    this->declare_parameter<bool>("use_adaptive_lookahead", true);
+    this->declare_parameter<double>("lookahead_min", 0.5);
+    this->declare_parameter<double>("lookahead_max", 3.0);
+    this->declare_parameter<double>("k_curvature", 0.5);
+    this->declare_parameter<double>("k_error", 0.3);
+    this->declare_parameter<double>("curvature_epsilon", 0.001);
+
+    // Stanley controller parameters
+    this->declare_parameter<bool>("use_stanley", true);
+    this->declare_parameter<double>("stanley_k", 0.5);
+
+    // Steering filter parameters
+    this->declare_parameter<bool>("use_steering_filter", true);
+    this->declare_parameter<double>("steering_alpha", 0.3);
+
+    // Debug mode parameters
+    this->declare_parameter<bool>("debug_mode", false);
+    this->declare_parameter<double>("velocity_gain", 1.0);
+    this->declare_parameter<double>("debug_min_speed", 0.5);
+
     // Speed mode parameters
     this->declare_parameter<std::string>("speed_mode", "default");  // "default", "path_velocity", "curvature"
     this->declare_parameter<double>("friction_coeff", 0.9);
@@ -38,6 +59,29 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     path_timeout_ = this->get_parameter("path_timeout").as_double();
     use_speed_lookahead_ = this->get_parameter("use_speed_lookahead").as_bool();
 
+    // Adaptive lookahead parameters
+    use_adaptive_lookahead_ = this->get_parameter("use_adaptive_lookahead").as_bool();
+    lookahead_min_ = this->get_parameter("lookahead_min").as_double();
+    lookahead_max_ = this->get_parameter("lookahead_max").as_double();
+    k_curvature_ = this->get_parameter("k_curvature").as_double();
+    k_error_ = this->get_parameter("k_error").as_double();
+    curvature_epsilon_ = this->get_parameter("curvature_epsilon").as_double();
+
+    // Stanley controller parameters
+    use_stanley_ = this->get_parameter("use_stanley").as_bool();
+    stanley_k_ = this->get_parameter("stanley_k").as_double();
+
+    // Steering filter parameters
+    use_steering_filter_ = this->get_parameter("use_steering_filter").as_bool();
+    steering_alpha_ = this->get_parameter("steering_alpha").as_double();
+    prev_steering_ = 0.0;  // Initialize previous steering for filter
+    prev_steering_for_accel_ = 0.0;  // Initialize previous steering for acceleration
+
+    // Debug mode parameters
+    debug_mode_ = this->get_parameter("debug_mode").as_bool();
+    velocity_gain_ = this->get_parameter("velocity_gain").as_double();
+    debug_min_speed_ = this->get_parameter("debug_min_speed").as_double();
+
     // Speed mode
     std::string speed_mode_str = this->get_parameter("speed_mode").as_string();
     if (speed_mode_str == "path_velocity") {
@@ -54,27 +98,30 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     max_speed_limit_ = this->get_parameter("max_speed_limit").as_double();
     min_speed_limit_ = this->get_parameter("min_speed_limit").as_double();
 
-    // Steering-based speed limiting parameters
-    this->declare_parameter<bool>("use_steering_limit", false);
-    this->declare_parameter<std::string>("steering_lookup_table", "NUC6_glc_pacejka_lookup_table.csv");
+    // Acceleration limiting parameters (friction circle based)
+    this->declare_parameter<bool>("use_acceleration_limit", false);
+    this->declare_parameter<std::string>("lateral_accel_lookup_table", "dawgs_lookup_table.csv");
     this->declare_parameter<std::string>("package_share_dir", "/home/dawgs_nx/f1tenth_dawgs/src/controller/path_tracker/config");
-    this->declare_parameter<double>("max_lateral_accel", 9.81);
+    this->declare_parameter<double>("max_total_acceleration", 9.81);  // 1g default
 
-    use_steering_limit_ = this->get_parameter("use_steering_limit").as_bool();
-    max_lateral_accel_ = this->get_parameter("max_lateral_accel").as_double();
+    use_acceleration_limit_ = this->get_parameter("use_acceleration_limit").as_bool();
+    max_total_acceleration_ = this->get_parameter("max_total_acceleration").as_double();
+    prev_commanded_speed_ = 0.0;  // Initialize previous speed
 
-    // Load steering lookup table if enabled
-    if (use_steering_limit_) {
-        std::string lookup_table_file = this->get_parameter("steering_lookup_table").as_string();
+    // Load lateral acceleration lookup table if enabled
+    if (use_acceleration_limit_) {
+        std::string lookup_table_file = this->get_parameter("lateral_accel_lookup_table").as_string();
         std::string package_share_dir = this->get_parameter("package_share_dir").as_string();
         std::string lookup_table_path = package_share_dir + "/" + lookup_table_file;
 
-        if (!loadSteeringLookupTable(lookup_table_path)) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to load steering lookup table, disabling steering limit");
-            use_steering_limit_ = false;
+        if (!loadLateralAccelerationLookupTable(lookup_table_path)) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to load lateral acceleration lookup table, disabling acceleration limit");
+            use_acceleration_limit_ = false;
         } else {
-            RCLCPP_INFO(this->get_logger(), "Steering-based speed limiting enabled with table: %s",
+            RCLCPP_INFO(this->get_logger(), "Friction circle acceleration limiting enabled with table: %s",
                         lookup_table_file.c_str());
+            RCLCPP_INFO(this->get_logger(), "Max total acceleration (friction circle): %.2f m/s²",
+                        max_total_acceleration_);
         }
     }
 
@@ -84,22 +131,38 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     global_path_topic_ = this->get_parameter("global_path_topic").as_string();
     base_frame_ = this->get_parameter("base_frame").as_string();
 
+    // QoS for sensor data: Best Effort for low latency
+    auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(5));
+    sensor_qos.best_effort();
+
+    // QoS for path data: Reliable for data integrity
+    auto path_qos = rclcpp::QoS(rclcpp::KeepLast(10));
+    path_qos.reliable();
+
+    // QoS for control commands: Best Effort for real-time response
+    auto control_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    control_qos.best_effort();
+
+    // QoS for visualization: Best Effort, small buffer
+    auto viz_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    viz_qos.best_effort();
+
     // Subscribers
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        odom_topic_, 10, std::bind(&PathTrackerNode::odomCallback, this, std::placeholders::_1));
+        odom_topic_, sensor_qos, std::bind(&PathTrackerNode::odomCallback, this, std::placeholders::_1));
 
     path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
-        path_topic_, 10, std::bind(&PathTrackerNode::pathCallback, this, std::placeholders::_1));
+        path_topic_, path_qos, std::bind(&PathTrackerNode::pathCallback, this, std::placeholders::_1));
 
     // Subscribe to global path for velocity reference (if needed)
     if (speed_mode_ == SpeedMode::PATH_VELOCITY || speed_mode_ == SpeedMode::OPTIMIZE) {
         global_path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
-            global_path_topic_, 10, std::bind(&PathTrackerNode::globalPathCallback, this, std::placeholders::_1));
+            global_path_topic_, path_qos, std::bind(&PathTrackerNode::globalPathCallback, this, std::placeholders::_1));
     }
 
     // Publishers
-    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic_, 10);
-    lookahead_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("lookahead_point", 10);
+    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic_, control_qos);
+    lookahead_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("lookahead_point", viz_qos);
 
     RCLCPP_INFO(this->get_logger(), "Path Tracker Node initialized");
     RCLCPP_INFO(this->get_logger(), "Listening to path topic: %s", path_topic_.c_str());
@@ -108,6 +171,8 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
         RCLCPP_INFO(this->get_logger(), "Listening to global path topic: %s", global_path_topic_.c_str());
     }
     RCLCPP_INFO(this->get_logger(), "Lookahead: base=%.2f m, k=%.2f", lookahead_base_, lookahead_k_);
+    RCLCPP_INFO(this->get_logger(), "Debug mode: %s, Velocity gain: %.2f, Min speed: %.2f m/s",
+                debug_mode_ ? "ENABLED" : "disabled", velocity_gain_, debug_min_speed_);
 }
 
 void PathTrackerNode::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
@@ -142,7 +207,7 @@ void PathTrackerNode::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
         // Log first 3 points for debugging
         if (i < 3) {
             RCLCPP_INFO(this->get_logger(),
-                "PATH_CALLBACK: Point[%zu]: pose.z=%.4f → pt.v=%.2f m/s",
+                "PATH_CALLBACK: Point[%zu]: pose.z=%.2f → pt.v=%.2f m/s",
                 i, pose.pose.position.z, pt.v);
         }
 
@@ -237,12 +302,21 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
         return;
     }
 
-    // Compute lookahead distance
-    double lookahead_dist = lookahead_base_;
+    // Calculate curvature at closest point for adaptive lookahead
+    double curvature = computeCurvatureAtPoint(closest.idx);
+
+    // Calculate lateral error for adaptive lookahead and Stanley
+    double lateral_error = computeLateralError(px, py, closest);
+
+    // Compute base lookahead distance
+    double base_lookahead = lookahead_base_;
     if (use_speed_lookahead_) {
-        lookahead_dist = lookahead_base_ + lookahead_k_ * std::max(0.0, v);
+        base_lookahead = lookahead_base_ + lookahead_k_ * std::max(0.0, v);
     }
-    lookahead_dist = std::max(0.5, lookahead_dist);  // Minimum lookahead
+    base_lookahead = std::max(0.5, base_lookahead);  // Minimum lookahead
+
+    // Apply adaptive lookahead adjustment based on curvature and lateral error
+    double lookahead_dist = computeAdaptiveLookahead(base_lookahead, curvature, lateral_error, v);
 
     // Find lookahead point
     auto lookahead = findLookaheadPoint(closest.idx, lookahead_dist);
@@ -262,24 +336,39 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
     visualizeLookahead(lookahead.x, lookahead.y);
 
     // Compute steering angle using pure pursuit
-    double steering = computeSteeringAngle(px, py, yaw, lookahead.x, lookahead.y);
+    double pure_pursuit_steering = computeSteeringAngle(px, py, yaw, lookahead.x, lookahead.y);
+
+    // Add Stanley term for cutting suppression
+    double path_yaw = current_path_[closest.idx].yaw;
+    double stanley_correction = computeStanleyTerm(lateral_error, v, path_yaw, yaw);
+
+    // Combine Pure Pursuit and Stanley
+    double combined_steering = pure_pursuit_steering + stanley_correction;
+
+    // Apply low-pass filter for smooth steering
+    double filtered_steering = applySteeringFilter(combined_steering);
 
     // Clamp steering angle
-    steering = std::max(-max_steering_angle_, std::min(max_steering_angle_, steering));
+    double steering = std::max(-max_steering_angle_, std::min(max_steering_angle_, filtered_steering));
 
     // Compute speed based on selected mode
     double target_speed = computeSpeed(lookahead, v);
 
-    // Apply steering-based speed limiting (if enabled)
-    if (use_steering_limit_) {
-        double max_safe_speed = computeMaxSafeSpeed(steering, v);
-        double speed_before_limit = target_speed;
-        target_speed = std::min(target_speed, max_safe_speed);
+    // Apply acceleration limiting (if enabled) - friction circle based
+    double commanded_speed = target_speed;
+    double longitudinal_accel = 0.0;
+    if (use_acceleration_limit_) {
+        // Get time since last command (approximate with typical control loop time)
+        double dt = 0.05;  // 20 Hz typical control loop, can be computed from timestamps
 
-        if (speed_before_limit > target_speed + 0.1) {  // Log only significant reductions
+        // Apply friction circle acceleration rate limiting
+        commanded_speed = applyAccelerationLimit(target_speed, v, dt, steering);
+        longitudinal_accel = (commanded_speed - v) / dt;
+
+        if (std::abs(commanded_speed - target_speed) > 0.1) {  // Log significant changes
             RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                "Speed limited by steering: %.2f → %.2f m/s (steering=%.3f rad)",
-                speed_before_limit, target_speed, steering);
+                "Speed limited by friction circle: target=%.2f → commanded=%.2f m/s (current=%.2f)",
+                target_speed, commanded_speed, v);
         }
     }
 
@@ -288,8 +377,25 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
     drive_msg.header.stamp = this->now();
     drive_msg.header.frame_id = base_frame_;
     drive_msg.drive.steering_angle = steering;
-    drive_msg.drive.speed = target_speed;
+    drive_msg.drive.speed = commanded_speed;
+
+    // Store longitudinal acceleration in the acceleration field
+    if (use_acceleration_limit_) {
+        drive_msg.drive.acceleration = longitudinal_accel;
+
+        double lateral_accel = computeCurrentLateralAcceleration(steering, v);
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            "Friction circle: a_lat=%.2f m/s², a_long=%.2f m/s², a_total=%.2f m/s² (steering=%.3f rad)",
+            lateral_accel, longitudinal_accel,
+            std::sqrt(lateral_accel * lateral_accel + longitudinal_accel * longitudinal_accel),
+            steering);
+    }
+
     drive_pub_->publish(drive_msg);
+
+    // Update previous commanded speed and steering for next cycle
+    prev_commanded_speed_ = commanded_speed;
+    prev_steering_for_accel_ = steering;
 
     RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 500,
         "Tracking: dist_to_path=%.2f m, lookahead=%.2f m, steering=%.3f rad, speed=%.2f m/s",
@@ -478,6 +584,22 @@ double PathTrackerNode::computeSpeed(const LookaheadResult& lookahead, double cu
     // Clamp speed to limits
     speed = std::max(min_speed_limit_, std::min(max_speed_limit_, speed));
 
+    // Apply velocity gain and minimum speed for debug mode
+    double original_speed = speed;
+    speed *= velocity_gain_;
+
+    // Apply debug minimum speed if in debug mode
+    if (debug_mode_) {
+        speed = std::max(speed, debug_min_speed_);
+
+        // Debug logging
+        if (std::abs(velocity_gain_ - 1.0) > 0.01 || speed != original_speed * velocity_gain_) {
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                "Debug mode: Original=%.2f m/s → After gain=%.2f m/s → Final=%.2f m/s (gain=%.2f, min=%.2f)",
+                original_speed, original_speed * velocity_gain_, speed, velocity_gain_, debug_min_speed_);
+        }
+    }
+
     return speed;
 }
 
@@ -565,11 +687,11 @@ double PathTrackerNode::computeCurvature(const PathPoint& p1, const PathPoint& p
     return kappa;
 }
 
-bool PathTrackerNode::loadSteeringLookupTable(const std::string& filename) {
+bool PathTrackerNode::loadLateralAccelerationLookupTable(const std::string& filename) {
     // Open CSV file
     std::ifstream file(filename);
     if (!file.is_open()) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open steering lookup table: %s", filename.c_str());
+        RCLCPP_ERROR(this->get_logger(), "Failed to open lateral acceleration lookup table: %s", filename.c_str());
         return false;
     }
 
@@ -631,85 +753,290 @@ bool PathTrackerNode::loadSteeringLookupTable(const std::string& filename) {
     }
 
     RCLCPP_INFO(this->get_logger(),
-                "Loaded steering lookup table: %zu steering angles × %zu velocities",
+                "Loaded lateral acceleration lookup table: %zu steering angles × %zu velocities",
                 steering_angles_.size(), velocities_.size());
 
     return true;
 }
 
-double PathTrackerNode::computeMaxSafeSpeed(double steering_angle, double current_speed) {
-    if (!use_steering_limit_ || steering_angles_.empty() || velocities_.empty()) {
-        return max_speed_limit_;  // No limit if not enabled
+double PathTrackerNode::getMaxLateralAccelerationFromTable(double steering_angle, double current_speed) {
+    if (!use_acceleration_limit_ || steering_angles_.empty() || velocities_.empty()) {
+        return max_total_acceleration_;  // Return max if not enabled
     }
 
     // Use absolute steering angle
     double abs_steering = std::abs(steering_angle);
 
     // Find the two closest steering angles in the lookup table
-    size_t lower_idx = 0;
-    size_t upper_idx = 0;
+    size_t lower_steer_idx = 0;
+    size_t upper_steer_idx = 0;
 
     for (size_t i = 0; i < steering_angles_.size(); ++i) {
         if (steering_angles_[i] <= abs_steering) {
-            lower_idx = i;
+            lower_steer_idx = i;
         } else {
-            upper_idx = i;
+            upper_steer_idx = i;
             break;
         }
     }
 
     // If beyond table range, use last index
-    if (upper_idx == 0 && abs_steering > steering_angles_.back()) {
-        lower_idx = steering_angles_.size() - 1;
-        upper_idx = steering_angles_.size() - 1;
+    if (upper_steer_idx == 0 && abs_steering > steering_angles_.back()) {
+        lower_steer_idx = steering_angles_.size() - 1;
+        upper_steer_idx = steering_angles_.size() - 1;
     }
 
-    // For each velocity in the table, check if the vehicle can maintain it
-    // at the given steering angle with acceptable lateral acceleration
-    double max_safe_vel = max_speed_limit_;
+    // Find the two closest velocities in the lookup table
+    size_t lower_vel_idx = 0;
+    size_t upper_vel_idx = 0;
 
-    for (int v_idx = velocities_.size() - 1; v_idx >= 0; --v_idx) {
-        double velocity = velocities_[v_idx];
-
-        // Interpolate acceleration at this steering angle and velocity
-        double accel_lower = (lower_idx < accel_table_.size() && v_idx < accel_table_[lower_idx].size())
-                             ? accel_table_[lower_idx][v_idx] : 0.0;
-        double accel_upper = (upper_idx < accel_table_.size() && v_idx < accel_table_[upper_idx].size())
-                             ? accel_table_[upper_idx][v_idx] : 0.0;
-
-        double accel;
-        if (lower_idx == upper_idx) {
-            accel = accel_lower;
+    for (size_t i = 0; i < velocities_.size(); ++i) {
+        if (velocities_[i] <= current_speed) {
+            lower_vel_idx = i;
         } else {
-            // Linear interpolation between steering angles
-            double t = (abs_steering - steering_angles_[lower_idx]) /
-                       (steering_angles_[upper_idx] - steering_angles_[lower_idx]);
-            accel = accel_lower + t * (accel_upper - accel_lower);
-        }
-
-        // Check if lateral acceleration is within safe limits
-        // The lookup table stores maximum achievable lateral acceleration
-        // We want velocity where required lateral accel <= table value
-
-        // Required lateral acceleration: a_lat = v^2 / R = v^2 * kappa
-        // For small angles: kappa ≈ steering_angle / wheelbase
-        double curvature = abs_steering / wheelbase_;
-        double required_lateral_accel = velocity * velocity * curvature;
-
-        // If the achievable acceleration at this velocity is sufficient
-        // and within our max limit, this velocity is safe
-        if (required_lateral_accel <= max_lateral_accel_ &&
-            required_lateral_accel <= accel * 10.0) {  // accel in table is normalized
-            max_safe_vel = velocity;
+            upper_vel_idx = i;
             break;
         }
     }
 
-    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                          "Steering limit: angle=%.3f rad, max_safe_speed=%.2f m/s",
-                          steering_angle, max_safe_vel);
+    // If beyond table range, use last index
+    if (upper_vel_idx == 0 && current_speed > velocities_.back()) {
+        lower_vel_idx = velocities_.size() - 1;
+        upper_vel_idx = velocities_.size() - 1;
+    }
 
-    return max_safe_vel;
+    // Get four corner values for bilinear interpolation
+    double accel_00 = (lower_steer_idx < accel_table_.size() && lower_vel_idx < accel_table_[lower_steer_idx].size())
+                      ? accel_table_[lower_steer_idx][lower_vel_idx] : 0.0;
+    double accel_10 = (upper_steer_idx < accel_table_.size() && lower_vel_idx < accel_table_[upper_steer_idx].size())
+                      ? accel_table_[upper_steer_idx][lower_vel_idx] : 0.0;
+    double accel_01 = (lower_steer_idx < accel_table_.size() && upper_vel_idx < accel_table_[lower_steer_idx].size())
+                      ? accel_table_[lower_steer_idx][upper_vel_idx] : 0.0;
+    double accel_11 = (upper_steer_idx < accel_table_.size() && upper_vel_idx < accel_table_[upper_steer_idx].size())
+                      ? accel_table_[upper_steer_idx][upper_vel_idx] : 0.0;
+
+    // Bilinear interpolation
+    double accel;
+    if (lower_steer_idx == upper_steer_idx && lower_vel_idx == upper_vel_idx) {
+        // Exact match
+        accel = accel_00;
+    } else if (lower_steer_idx == upper_steer_idx) {
+        // Interpolate in velocity dimension only
+        double t_vel = (current_speed - velocities_[lower_vel_idx]) /
+                       (velocities_[upper_vel_idx] - velocities_[lower_vel_idx]);
+        accel = accel_00 + t_vel * (accel_01 - accel_00);
+    } else if (lower_vel_idx == upper_vel_idx) {
+        // Interpolate in steering dimension only
+        double t_steer = (abs_steering - steering_angles_[lower_steer_idx]) /
+                         (steering_angles_[upper_steer_idx] - steering_angles_[lower_steer_idx]);
+        accel = accel_00 + t_steer * (accel_10 - accel_00);
+    } else {
+        // Full bilinear interpolation
+        double t_steer = (abs_steering - steering_angles_[lower_steer_idx]) /
+                         (steering_angles_[upper_steer_idx] - steering_angles_[lower_steer_idx]);
+        double t_vel = (current_speed - velocities_[lower_vel_idx]) /
+                       (velocities_[upper_vel_idx] - velocities_[lower_vel_idx]);
+
+        double accel_0 = accel_00 + t_steer * (accel_10 - accel_00);
+        double accel_1 = accel_01 + t_steer * (accel_11 - accel_01);
+        accel = accel_0 + t_vel * (accel_1 - accel_0);
+    }
+
+    // Clamp to max total acceleration limit
+    accel = std::min(accel, max_total_acceleration_);
+
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                          "Table max lateral accel: steering=%.3f rad, speed=%.2f m/s → a_lat_max=%.2f m/s²",
+                          steering_angle, current_speed, accel);
+
+    return accel;
+}
+
+double PathTrackerNode::computeCurrentLateralAcceleration(double steering_angle, double current_speed) {
+    // Calculate actual lateral acceleration from current steering and speed
+    // a_lateral = v² / R = v² * curvature
+    // For Ackermann steering: curvature ≈ tan(steering_angle) / wheelbase
+    // For small angles: curvature ≈ steering_angle / wheelbase
+
+    if (std::abs(current_speed) < 0.01) {
+        return 0.0;  // No lateral acceleration at standstill
+    }
+
+    double curvature = std::tan(steering_angle) / wheelbase_;
+    double lateral_accel = current_speed * current_speed * std::abs(curvature);
+
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                          "Current lateral accel: v=%.2f m/s, steering=%.3f rad → a_lat=%.2f m/s²",
+                          current_speed, steering_angle, lateral_accel);
+
+    return lateral_accel;
+}
+
+double PathTrackerNode::computeMaxLongitudinalAcceleration(double lateral_accel) {
+    // Friction circle constraint: a_total² = a_lateral² + a_longitudinal²
+    // Therefore: a_longitudinal_max = sqrt(a_total_max² - a_lateral²)
+
+    double a_total_sq = max_total_acceleration_ * max_total_acceleration_;
+    double a_lat_sq = lateral_accel * lateral_accel;
+
+    // Safety check: if lateral acceleration exceeds total limit, return 0
+    if (a_lat_sq >= a_total_sq) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "Lateral acceleration (%.2f m/s²) exceeds total limit (%.2f m/s²)! "
+                             "Longitudinal acceleration set to 0",
+                             lateral_accel, max_total_acceleration_);
+        return 0.0;
+    }
+
+    double a_long_max = std::sqrt(a_total_sq - a_lat_sq);
+
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                          "Friction circle: a_lat=%.2f m/s² → a_long_max=%.2f m/s² (a_total_max=%.2f m/s²)",
+                          lateral_accel, a_long_max, max_total_acceleration_);
+
+    return a_long_max;
+}
+
+double PathTrackerNode::applyAccelerationLimit(double target_speed, double current_speed, double dt, double steering_angle) {
+    // Calculate desired longitudinal acceleration
+    double desired_accel = (target_speed - current_speed) / dt;
+
+    // Calculate current lateral acceleration from steering and speed
+    double lateral_accel = computeCurrentLateralAcceleration(steering_angle, current_speed);
+
+    // Compute maximum longitudinal acceleration from friction circle
+    double max_long_accel = computeMaxLongitudinalAcceleration(lateral_accel);
+
+    // Limit acceleration to both positive (acceleration) and negative (braking)
+    double limited_accel = std::max(-max_long_accel, std::min(max_long_accel, desired_accel));
+
+    // Calculate limited speed
+    double limited_speed = current_speed + limited_accel * dt;
+
+    // Clamp to speed limits
+    limited_speed = std::max(min_speed_limit_, std::min(max_speed_limit_, limited_speed));
+
+    // Calculate total acceleration magnitude for validation
+    double total_accel = std::sqrt(lateral_accel * lateral_accel + limited_accel * limited_accel);
+
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                          "Friction circle limit: desired_a_long=%.2f m/s² → limited_a_long=%.2f m/s² | "
+                          "a_lat=%.2f m/s², a_total=%.2f m/s² (max=%.2f) | "
+                          "target_speed=%.2f → limited_speed=%.2f m/s",
+                          desired_accel, limited_accel, lateral_accel, total_accel, max_total_acceleration_,
+                          target_speed, limited_speed);
+
+    return limited_speed;
+}
+
+// ============= Adaptive Lookahead Functions =============
+
+double PathTrackerNode::computeCurvatureAtPoint(size_t idx) {
+    if (current_path_.size() < 3) {
+        return 0.0;  // Not enough points
+    }
+
+    // Get three points for curvature calculation
+    size_t prev_idx = (idx > 0) ? idx - 1 : 0;
+    size_t curr_idx = std::min(idx, current_path_.size() - 1);
+    size_t next_idx = std::min(idx + 1, current_path_.size() - 1);
+
+    // Use existing computeCurvature function
+    return computeCurvature(current_path_[prev_idx],
+                           current_path_[curr_idx],
+                           current_path_[next_idx]);
+}
+
+double PathTrackerNode::computeLateralError(double px, double py, const ClosestPointResult& closest) {
+    if (current_path_.empty() || closest.idx >= current_path_.size()) {
+        return 0.0;
+    }
+
+    // Vector from vehicle to closest point
+    double dx = closest.x - px;
+    double dy = closest.y - py;
+
+    // Path direction at closest point
+    double path_yaw = current_path_[closest.idx].yaw;
+
+    // Project vehicle position onto path tangent to get lateral error
+    // Lateral error = perpendicular distance (signed)
+    double lateral_error = -dx * std::sin(path_yaw) + dy * std::cos(path_yaw);
+
+    return lateral_error;
+}
+
+double PathTrackerNode::computeAdaptiveLookahead(double base_lookahead, double curvature,
+                                                  double lateral_error, double velocity) {
+    double adaptive_lookahead = base_lookahead;
+
+    if (use_adaptive_lookahead_) {
+        // Curvature-based adjustment: L = L_min + k_curv / (|curvature| + ε)
+        double curv_adjustment = k_curvature_ / (std::abs(curvature) + curvature_epsilon_);
+
+        // Lateral error-based adjustment: L = L0 - k_e * |e_y|
+        double error_adjustment = -k_error_ * std::abs(lateral_error);
+
+        // Combined adaptive lookahead
+        adaptive_lookahead = lookahead_min_ + curv_adjustment + error_adjustment;
+
+        // Clamp to min/max bounds
+        adaptive_lookahead = std::max(lookahead_min_, std::min(lookahead_max_, adaptive_lookahead));
+
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            "Adaptive lookahead: base=%.2f, curv=%.4f, curv_adj=%.2f, error=%.3f, error_adj=%.2f → final=%.2f m",
+            base_lookahead, curvature, curv_adjustment, lateral_error, error_adjustment, adaptive_lookahead);
+    }
+
+    return adaptive_lookahead;
+}
+
+// ============= Stanley Controller Functions =============
+
+double PathTrackerNode::computeStanleyTerm(double lateral_error, double velocity,
+                                           double path_yaw, double vehicle_yaw) {
+    if (!use_stanley_) {
+        return 0.0;
+    }
+
+    // Stanley term: δ_stanley = atan(k_e * e_y / v)
+    // Avoid division by very small velocity
+    double safe_velocity = std::max(0.1, std::abs(velocity));
+    double stanley_term = std::atan(stanley_k_ * lateral_error / safe_velocity);
+
+    // Also add heading error component
+    double heading_error = path_yaw - vehicle_yaw;
+
+    // Normalize heading error to [-π, π]
+    while (heading_error > M_PI) heading_error -= 2.0 * M_PI;
+    while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
+
+    // Total Stanley correction
+    double total_stanley = stanley_term + heading_error;
+
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "Stanley: lat_err=%.3f, v=%.2f, stanley_term=%.3f, heading_err=%.3f → total=%.3f",
+        lateral_error, velocity, stanley_term, heading_error, total_stanley);
+
+    return total_stanley;
+}
+
+double PathTrackerNode::applySteeringFilter(double raw_steering) {
+    if (!use_steering_filter_) {
+        return raw_steering;
+    }
+
+    // Low-pass filter: δ_filtered = (1 - α) * δ_prev + α * δ_raw
+    double filtered_steering = (1.0 - steering_alpha_) * prev_steering_ + steering_alpha_ * raw_steering;
+
+    // Update previous steering for next iteration
+    prev_steering_ = filtered_steering;
+
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "Steering filter: raw=%.3f, filtered=%.3f (α=%.2f)",
+        raw_steering, filtered_steering, steering_alpha_);
+
+    return filtered_steering;
 }
 
 int main(int argc, char **argv) {

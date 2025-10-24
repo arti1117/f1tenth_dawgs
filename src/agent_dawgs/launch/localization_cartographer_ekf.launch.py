@@ -15,7 +15,8 @@ def generate_launch_description():
                 get_package_share_directory('f1tenth_stack'),
                 'launch',
                 'bringup_launch.py')
-        )
+        ),
+        launch_arguments={'publish_map_odom_tf': 'false'}.items()
     )
 
     ekf_launch = IncludeLaunchDescription(
@@ -36,10 +37,16 @@ def generate_launch_description():
         )
     )
 
-
+    initialpose_bridge_node = Node(
+        package='agent_dawgs',
+        executable='initialpose_bridge.py',
+        name='initialpose_bridge',
+        output='screen'
+    )
 
     ld.add_action(f1tenth_system_launch)
     ld.add_action(ekf_launch)
     ld.add_action(cartographer_ekf_launch)
+    ld.add_action(initialpose_bridge_node)
     # ld.add_action(cartographer_occupancy_grid_launch)
     return ld

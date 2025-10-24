@@ -15,41 +15,51 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     use_rviz = LaunchConfiguration('use_rviz', default='true')
     use_bringup = LaunchConfiguration('use_bringup', default='true')
+    use_ekf = LaunchConfiguration('use_ekf', default='true')
 
     agent_dawgs_prefix = get_package_share_directory('agent_dawgs')
     f1tenth_stack_prefix = get_package_share_directory('f1tenth_stack')
 
     particle_filter_config = LaunchConfiguration('particle_filter_config',
         default=os.path.join(
-            get_package_share_directory('particle_filter'),
+            get_package_share_directory('agent_dawgs'),
             'config',
-            'localize.yaml'
+            'pf_localize.yaml'
         ))
 
     rviz_config_dir = os.path.join(agent_dawgs_prefix, 'rviz', 'cartographer_dawgs.rviz')
 
-    # F1TENTH bringup launch
+    # F1TENTH bringup launch (without static map->odom for localization)
     bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(f1tenth_stack_prefix, 'launch', 'bringup_launch.py')
         ]),
+        launch_arguments={'publish_map_odom_tf': 'false'}.items(),
         condition=IfCondition(use_bringup)
+    )
+
+    # EKF launch for odometry/filtered
+    ekf_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            os.path.join(agent_dawgs_prefix, 'launch', 'ekf_launch.py')
+        ]),
+        condition=IfCondition(use_ekf)
     )
 
     # Map file configuration
     DeclareLaunchArgument(
         'map_directory',
-        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon'
+        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun'
     ),
     DeclareLaunchArgument(
         'map_name',
-        default_value='icheon1009_map'
+        default_value='mohyun_1016_map'
     ),
     map_directory = LaunchConfiguration('map_directory')
     map_name = LaunchConfiguration('map_name')
 
     yaml_file = LaunchConfiguration('yaml_file',
-        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map.yaml'),
+        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map.yaml'),
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -68,11 +78,42 @@ def generate_launch_description():
             'use_bringup',
             default_value='true',
             description='Launch F1TENTH hardware bringup'),
+        DeclareLaunchArgument(
+            'use_ekf',
+            default_value='true',
+            description='Launch EKF for odometry filtering'),
 
         # F1TENTH hardware bringup
         bringup_launch,
 
-        # Particle filter node
+        # EKF for odometry filtering
+        ekf_launch,
+
+        # Map server node (lifecycle managed)
+        Node(
+            package='nav2_map_server',
+            executable='map_server',
+            name='map_server',
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'yaml_filename': yaml_file,
+            }],
+            output='screen'),
+
+        # Lifecycle manager for map server - starts map_server automatically
+        Node(
+            package='nav2_lifecycle_manager',
+            executable='lifecycle_manager',
+            name='lifecycle_manager_localization',
+            output='screen',
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'autostart': True,
+                'node_names': ['map_server']
+            }]
+        ),
+
+        # Particle filter node - started after map server through respawn delay
         Node(
             package='particle_filter',
             executable='particle_filter',
@@ -85,31 +126,17 @@ def generate_launch_description():
             remappings=[
                 ('odom', 'odometry/filtered'),
             ],
+            # Add respawn to handle startup race condition
+            respawn=True,
+            respawn_delay=3.0,
         ),
 
-        # Map server node
-        Node(
-            package='nav2_map_server',
-            executable='map_server',
-            name='map_server',
-            parameters=[{
-                'use_sim_time': use_sim_time,
-                'yaml_filename': yaml_file,
-            }],
-            output='screen'),
-
-        # Lifecycle manager for map server
-        Node(
-            package='nav2_lifecycle_manager',
-            executable='lifecycle_manager',
-            name='lifecycle_manager_localization',
-            output='screen',
-            parameters=[{
-                'use_sim_time': use_sim_time,
-                'autostart': True,
-                'node_names': ['map_server']
-            }]
-        ),
+        # # InitialPose bridge for RViz 2D Pose Estimate
+        # Node(
+        #     package='agent_dawgs',
+        #     executable='initialpose_bridge.py',
+        #     name='initialpose_bridge',
+        #     output='screen'),
 
         # RViz2 for visualization
         Node(

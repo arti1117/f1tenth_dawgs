@@ -538,10 +538,11 @@ class GlobalPlannerLogic:
         self.loginfo("=" * 60)
         self.loginfo("Step 9/10: Saving waypoints to JSON")
         self.loginfo("=" * 60)
-        json_path = os.path.join(self.map_dir, 'global_waypoints.json')
+        json_path = os.path.join(self.map_dir, f'{self.map_name}_wp.json')
         self.loginfo(f"  Writing to: {json_path}")
         write_global_waypoints(
             self.map_dir,
+            self.map_name,
             self.map_info_str,
             self.est_lap_time,
             centerline_markers,
@@ -561,8 +562,10 @@ class GlobalPlannerLogic:
         self.loginfo("=" * 60)
         write_waypoints_to_csv(
             self.map_dir,
+            self.map_name,
             global_traj_wpnts_iqp,
-            global_traj_wpnts_sp
+            global_traj_wpnts_sp,
+            centerline_waypoints
         )
         self.loginfo("  ✓ CSV files saved successfully")
 
@@ -576,8 +579,9 @@ class GlobalPlannerLogic:
         self.loginfo(f"  SP lap time: {est_t_sp:.2f}s")
         self.loginfo(f"  Output files:")
         self.loginfo(f"    - JSON: {json_path}")
-        self.loginfo(f"    - CSV (IQP): {os.path.join(self.map_dir, 'global_waypoints_iqp.csv')}")
-        self.loginfo(f"    - CSV (SP): {os.path.join(self.map_dir, 'global_waypoints_sp.csv')}")
+        self.loginfo(f"    - CSV (IQP): {os.path.join(self.map_dir, f'{self.map_name}_iqp.csv')}")
+        self.loginfo(f"    - CSV (SP): {os.path.join(self.map_dir, f'{self.map_name}_sp.csv')}")
+        self.loginfo(f"    - CSV (Centerline): {os.path.join(self.map_dir, f'{self.map_name}_center.csv')}")
         self.loginfo("=" * 60)
 
         return True
