@@ -85,11 +85,14 @@ void AckermannMux::init()
   getTopicHandles("topics", *velocity_hs_);
   getTopicHandles("locks", *lock_hs_);
 
-  /// Publisher for output topic:
+  /// Publisher for output topic with real-time QoS:
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(1));
+  qos.best_effort();  // Best effort for minimal latency
+
   cmd_pub_ =
     this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(
     "ackermann_cmd",
-    rclcpp::QoS(rclcpp::KeepLast(1)));
+    qos);
 
   /// Diagnostics:
   diagnostics_ = std::make_shared<diagnostics_type>(this);

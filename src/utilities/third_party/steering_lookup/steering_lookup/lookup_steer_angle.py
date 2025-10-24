@@ -20,7 +20,7 @@ def find_closest_neighbors(array, value):
         return array[closest_idx], closest_idx, array[closest_idx], closest_idx
     else:
       second_closest, second_idx = \
-        find_nearest(array[[max(closest_idx-1, 0), 
+        find_nearest(array[[max(closest_idx-1, 0),
         min(closest_idx+1, len(array)-1)]], value)
       second_idx = -1 + closest_idx + 2 * second_idx
       return closest, closest_idx, second_closest, second_idx
@@ -48,7 +48,7 @@ class LookupSteerAngle:
         accel = abs(accel)
         lu_vs = self.lu[0, 1:]
         lu_steers = self.lu[1:, 0]
-        
+
         #if (vel > lu_vs[-1]):
         # self.logger(5, "Velocity exceeds lookup table, generating steering angle for v :" + str(lu_vs[-1]))
 

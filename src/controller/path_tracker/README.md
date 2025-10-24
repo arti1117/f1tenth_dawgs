@@ -625,3 +625,57 @@ Add displays:
   ros2 run path_tracker path_tracker_node
 
   이제 로그를 보면 velocity가 어디서 손실되는지 정확히 추적할 수 있습니다!
+
+---
+● 완료했습니다! path_tracker를 수정해서 lookup table의 acceleration 값을 직접 사용하도록 변경했습니다.
+
+  주요 변경사항
+
+  ✅ 이전 방식 (Steering-Based Speed Limiting)
+
+  - steering angle로 최대 속도를 제한
+  - 속도가 갑자기 변할 수 있음
+
+  ✅ 새로운 방식 (Acceleration Limiting)
+
+  - lookup table에서 현재 steering/속도에 해당하는 가속도 값을 읽음
+  - 가속도(acceleration)를 제한해서 부드러운 속도 변화
+  - drive topic의 acceleration 필드에 lookup table 값을 직접 발행
+
+  구현 내용
+
+  1. getAccelerationFromTable(): Bilinear interpolation으로 lookup table에서 가속도 값 읽기
+  2. applyAccelerationLimit(): 가속도 제한을 적용해서 속도 명령 생성
+  3. State tracking: 이전 속도와 steering angle 추적
+  4. Drive command: drive.acceleration 필드에 lookup table 값 저장
+
+  설정 파일 변경
+
+  # tracker_params.yaml
+  use_acceleration_limit: true
+  acceleration_lookup_table: "dawgs_lookup_table.csv"
+  max_acceleration: 5.0  # [m/s²] - 최대 가속도 제한
+
+  빌드 결과
+
+  ✅ 성공적으로 빌드 완료 (1분 22초)
+  - 경고는 있지만 기능에는 문제없음
+
+  테스트 방법
+
+  source install/setup.bash
+  ros2 launch path_tracker path_tracker.launch.py
+
+  # drive topic 확인
+  ros2 topic echo /drive
+
+  예상 동작:
+  - drive.speed: 부드럽게 변하는 속도 명령
+  - drive.acceleration: lookup table에서 읽은 가속도 값
+  - 급격한 속도 변화 없이 매끄러운 제어
+
+  자세한 내용은 /home/dawgs_nx/f1tenth_dawgs/claudedocs/ACCELERATION_LIMITING_IMPLEMENTATION.md 문서를
+  참고하세요!
+
+--- comment
+lookup table을 잘못 해석하고 적용하고 있는듯하다. 

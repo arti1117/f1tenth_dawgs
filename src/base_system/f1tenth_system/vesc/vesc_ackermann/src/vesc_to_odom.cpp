@@ -71,8 +71,16 @@ VescToOdom::VescToOdom(const rclcpp::NodeOptions & options)
 
   publish_tf_ = declare_parameter("publish_tf", publish_tf_);
 
+  // QoS for odometry: Best Effort for low latency
+  auto odom_qos = rclcpp::QoS(rclcpp::KeepLast(5));
+  odom_qos.best_effort();
+
+  // QoS for VESC sensor data: Best Effort for real-time response
+  auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(10));
+  sensor_qos.best_effort();
+
   // create odom publisher
-  odom_pub_ = create_publisher<Odometry>("odom", 10);
+  odom_pub_ = create_publisher<Odometry>("odom", odom_qos);
 
   // create tf broadcaster
   if (publish_tf_) {
@@ -81,11 +89,11 @@ VescToOdom::VescToOdom(const rclcpp::NodeOptions & options)
 
   // subscribe to vesc state and. optionally, servo command
   vesc_state_sub_ = create_subscription<VescStateStamped>(
-    "sensors/core", 10, std::bind(&VescToOdom::vescStateCallback, this, _1));
+    "sensors/core", sensor_qos, std::bind(&VescToOdom::vescStateCallback, this, _1));
 
   if (use_servo_cmd_) {
     servo_sub_ = create_subscription<Float64>(
-      "sensors/servo_position_command", 10, std::bind(&VescToOdom::servoCmdCallback, this, _1));
+      "sensors/servo_position_command", sensor_qos, std::bind(&VescToOdom::servoCmdCallback, this, _1));
   }
 }
 

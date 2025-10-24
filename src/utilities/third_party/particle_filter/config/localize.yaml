@@ -2,8 +2,8 @@ particle_filter:
   ros__parameters:
     # topic names
     scan_topic: '/scan'
-    odometry_topic: '/odom'
-    # '/odom' '/ego_racecar/odom'
+    odometry_topic: 'odom'  # Will be remapped to /odometry/filtered in launch file
+    # Note: Use 'odom' without '/' to allow remapping to work properly
     # range data downsampling
     angle_step: 18
     max_particles: 4000

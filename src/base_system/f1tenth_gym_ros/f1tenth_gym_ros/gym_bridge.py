@@ -22,6 +22,7 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
 
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
@@ -143,12 +144,20 @@ class GymBridge(Node):
             self.opp_ego_odom_pub = self.create_publisher(Odometry, opp_ego_odom_topic, 10)
             self.opp_drive_published = False
 
+        # QoS for drive commands: Best Effort, Volatile for real-time response
+        drive_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+
         # subscribers
         self.ego_drive_sub = self.create_subscription(
             AckermannDriveStamped,
             ego_drive_topic,
             self.drive_callback,
-            10)
+            drive_qos)
         self.ego_reset_sub = self.create_subscription(
             PoseWithCovarianceStamped,
             '/initialpose',
@@ -159,7 +168,7 @@ class GymBridge(Node):
                 AckermannDriveStamped,
                 opp_drive_topic,
                 self.opp_drive_callback,
-                10)
+                drive_qos)
             self.opp_reset_sub = self.create_subscription(
                 PoseStamped,
                 '/goal_pose',

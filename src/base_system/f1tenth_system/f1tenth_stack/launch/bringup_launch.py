@@ -26,6 +26,7 @@ from launch.substitutions import Command
 from launch.substitutions import LaunchConfiguration
 from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import os
@@ -77,8 +78,12 @@ def generate_launch_description():
         'slam_config',
         default_value=slam_config,
         description='Descriptions for slam_toolbox configs')
+    publish_map_odom_tf_la = DeclareLaunchArgument(
+        'publish_map_odom_tf',
+        default_value='true',
+        description='Publish static map->odom transform (disable for localization)')
 
-    ld = LaunchDescription([joy_la, vesc_la, sensors_la, mux_la, slam_la])
+    ld = LaunchDescription([joy_la, vesc_la, sensors_la, mux_la, slam_la, publish_map_odom_tf_la])
 
     joy_node = Node(
         package='joy',
@@ -146,7 +151,8 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='static_map_to_odom',
-        arguments=['0.0', '0.0', '0.0', '0.0', '0.0', '0.0', 'map', 'odom']
+        arguments=['0.0', '0.0', '0.0', '0.0', '0.0', '0.0', 'map', 'odom'],
+        condition=IfCondition(LaunchConfiguration('publish_map_odom_tf'))
     )
 
     # finalize

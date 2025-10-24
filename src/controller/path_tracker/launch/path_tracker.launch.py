@@ -24,5 +24,8 @@ def generate_launch_description():
             , remappings=[
                 ('/odom', '/ego_racecar/odom'),
             ]
+            # , remappings=[
+            #     ('/odom', '/pf/pose/odom'),
+            # ]
         )
     ])

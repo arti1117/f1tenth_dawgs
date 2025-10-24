@@ -170,8 +170,12 @@ public:
     priority_type priority, AckermannMux * mux)
   : base_type(name, topic, timeout, priority, mux)
   {
+    // Real-time QoS: Best Effort + Keep Last 1 for minimal latency
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    qos.best_effort();
+
     subscriber_ = mux_->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
-      topic_, rclcpp::SystemDefaultsQoS(),
+      topic_, qos,
       std::bind(&VelocityTopicHandle::callback, this, std::placeholders::_1));
 
     // subscriber_ = nh_.create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
@@ -216,8 +220,12 @@ public:
     priority_type priority, AckermannMux * mux)
   : base_type(name, topic, timeout, priority, mux)
   {
+    // Real-time QoS: Best Effort + Keep Last 1 for minimal latency
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    qos.best_effort();
+
     subscriber_ = mux_->create_subscription<std_msgs::msg::Bool>(
-      topic_, rclcpp::SystemDefaultsQoS(),
+      topic_, qos,
       std::bind(&LockTopicHandle::callback, this, std::placeholders::_1));
   }
 

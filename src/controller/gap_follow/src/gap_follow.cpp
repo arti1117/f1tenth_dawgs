@@ -3,13 +3,27 @@
 ReactiveFollowGap::~ReactiveFollowGap() {}
 ReactiveFollowGap::ReactiveFollowGap() : rclcpp::Node("reactive_node")
 {
-    /// TODO: create ROS subscribers and publishers
-    ackermann_publisher_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic, 10);
-    scan_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(scan_topic, 10, std::bind(&ReactiveFollowGap::scan_callback, this, std::placeholders::_1));
+    // QoS for sensor data: Best Effort for low latency
+    auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(5));
+    sensor_qos.best_effort();
 
-    steer_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("steering_arrow", 10);
-    best_gap_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("best_gap_marker", 10);
-    many_gap_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("many_gap_marker", 10);
+    // QoS for control commands: Best Effort for real-time response
+    auto control_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    control_qos.best_effort();
+
+    // QoS for visualization: Best Effort, small buffer
+    auto viz_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    viz_qos.best_effort();
+
+    // Subscribers
+    scan_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+        scan_topic, sensor_qos, std::bind(&ReactiveFollowGap::scan_callback, this, std::placeholders::_1));
+
+    // Publishers
+    ackermann_publisher_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic, control_qos);
+    steer_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("steering_arrow", viz_qos);
+    best_gap_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("best_gap_marker", viz_qos);
+    many_gap_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("many_gap_marker", viz_qos);
 
     this->declare_parameter<float>("far_threshold", 3.0);
     this->declare_parameter<float>("near_threshold", 0.15);

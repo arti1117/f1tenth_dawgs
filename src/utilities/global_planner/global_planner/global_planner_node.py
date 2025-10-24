@@ -144,7 +144,7 @@ class GlobalPlanner(Node):
             map_infos, est_lap_time, centerline_markers, centerline_wpnts, \
                 glb_markers, glb_wpnts, \
                 glb_sp_markers, glb_sp_wpnts, \
-                track_bounds = read_global_waypoints(map_dir=self.map_dir)
+                track_bounds = read_global_waypoints(map_dir=self.map_dir, map_name=self.map_name)
         except FileNotFoundError as e:
             self.get_logger().error(f"{e}. Not republishing waypoints.")
             return

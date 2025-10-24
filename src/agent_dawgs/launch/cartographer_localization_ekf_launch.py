@@ -30,12 +30,12 @@ def generate_launch_description():
 
     DeclareLaunchArgument(
         'state_file_directory',
-        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon'
+        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun'
         # '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps'
     ),
     DeclareLaunchArgument(
         'state_file_name',
-        default_value='icheon1009_map'
+        default_value='mohyun_1016_m'
     ),
     state_file_directory = LaunchConfiguration('state_file_directory')
     state_file_name = LaunchConfiguration('state_file_name')
@@ -43,11 +43,11 @@ def generate_launch_description():
 
     # Join directory and filename (with extension)
     state_file = LaunchConfiguration('state_file',
-        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map.pbstream'),
+        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map.pbstream'),
 
 
     yaml_file = LaunchConfiguration('yaml_file',
-        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map.yaml'),
+        default= '/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map.yaml'),
 #   PathJoinSubstitution([state_file_directory, state_file_name, '.pbstream']),
 
 
@@ -112,6 +112,12 @@ def generate_launch_description():
             arguments=['-d', rviz_config_dir],
             parameters=[{'use_sim_time': use_sim_time}],
             condition=IfCondition(use_rviz),
+            output='screen'),
+
+        Node(
+            package='agent_dawgs',
+            executable='initialpose_bridge.py',
+            name='initialpose_bridge',
             output='screen'),
 
     ])

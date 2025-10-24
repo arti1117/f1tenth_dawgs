@@ -15,7 +15,8 @@ def generate_launch_description():
                 get_package_share_directory('f1tenth_stack'),
                 'launch',
                 'bringup_launch.py')
-        )
+        ),
+        launch_arguments={'publish_map_odom_tf': 'false'}.items()
     )
 
     ekf_launch = IncludeLaunchDescription(

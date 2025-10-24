@@ -180,9 +180,14 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
             raise JoyTeleopException("Only one of 'message_value' or 'axis_mappings' "
                                      "can be configured for command '{}'".format(name))
 
+        # Real-time QoS for minimal latency (changed from RELIABLE to BEST_EFFORT)
+        # Old code (buffered): qos = rclpy.qos.QoSProfile(history=rclpy.qos.QoSHistoryPolicy.KEEP_LAST,
+        #                            depth=1,
+        #                            reliability=rclpy.qos.QoSReliabilityPolicy.RELIABLE,
+        #                            durability=rclpy.qos.QoSDurabilityPolicy.VOLATILE)
         qos = rclpy.qos.QoSProfile(history=rclpy.qos.QoSHistoryPolicy.KEEP_LAST,
                                    depth=1,
-                                   reliability=rclpy.qos.QoSReliabilityPolicy.RELIABLE,
+                                   reliability=rclpy.qos.QoSReliabilityPolicy.BEST_EFFORT,
                                    durability=rclpy.qos.QoSDurabilityPolicy.VOLATILE)
 
         self.pub = node.create_publisher(self.topic_type, config['topic_name'], qos)

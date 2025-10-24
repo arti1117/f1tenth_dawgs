@@ -63,11 +63,14 @@ class GlobalRepublisher(Node):
         if map_path:
             self.get_logger().info(f"Reading parameters from {map_path}")
             try:
+                # Extract map name from directory path (e.g., /path/to/maps/hangar_1905_v0 -> hangar_1905_v0)
+                import os
+                map_name = os.path.basename(os.path.normpath(map_path))
                 (
                     self.map_infos, self.est_lap_time, self.centerline_markers,
                     self.centerline_wpnts, self.glb_markers, self.glb_wpnts,
                     self.glb_sp_markers, self.glb_sp_wpnts, self.track_bounds
-                ) = read_global_waypoints(map_dir=map_path)
+                ) = read_global_waypoints(map_dir=map_path, map_name=map_name)
             except FileNotFoundError:
                 self.get_logger().warn(f"{map_path} param not found. Not publishing")
         else:

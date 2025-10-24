@@ -1,0 +1,7 @@
+image: /home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/maps_20251016_151623.pgm
+mode: trinary
+resolution: 0.05
+origin: [-15.9, -11.2, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25
