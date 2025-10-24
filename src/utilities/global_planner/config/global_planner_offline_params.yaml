@@ -34,7 +34,7 @@ global_planner_offline_node:
 
     # Show matplotlib plots during trajectory generation
     # Set to false for automated/batch processing
-    show_plots: false
+    show_plots: true
 
 
     # === GLOBAL TRAJECTORY SETTINGS ===
