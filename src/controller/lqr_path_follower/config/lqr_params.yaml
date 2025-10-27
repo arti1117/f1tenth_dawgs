@@ -1,0 +1,137 @@
+lqr_path_follower:
+  ros__parameters:
+    # Control parameters
+    dt: 0.05                      # Control time step [s] - 20 Hz
+
+    # Vehicle parameters
+    wheelbase: 0.33               # Vehicle wheelbase [m]
+    max_steering_angle: 0.4189    # Maximum steering angle [rad] (~24 degrees)
+    max_speed: 8.0                # Maximum speed limit [m/s]
+    min_speed: 0.5                # Minimum speed limit [m/s]
+
+    # LQR cost function weights
+    # Higher weight = more importance in optimization
+
+    Q_lateral: 15.0               # Lateral position error weight
+                                  # High value → tighter path following
+                                  # Typical range: 10-25
+
+    Q_heading: 8.0                # Heading angle error weight
+                                  # High value → aggressive heading correction
+                                  # Typical range: 5-15
+
+    Q_velocity: 4.0               # Velocity tracking error weight
+                                  # High value → aggressive speed tracking
+                                  # Typical range: 1-5
+
+    R_steering: 1.0               # Steering control effort weight
+                                  # High value → less aggressive steering
+                                  # Low value → more responsive steering
+                                  # Typical range: 0.5-2.0
+
+    R_steering_rate: 5.0          # Steering rate-of-change weight
+                                  # High value → smoother steering transitions
+                                  # IMPORTANT for stability!
+                                  # Typical range: 3-10
+
+    # Lookahead parameters
+    lookahead_time: 0.8           # Time-based lookahead [s]
+                                  # Adaptive: lookahead_dist = v * lookahead_time
+                                  # Higher → looks further ahead (smoother but less responsive)
+                                  # Lower → more responsive but can oscillate
+                                  # Typical range: 0.5-1.5
+
+    min_lookahead_dist: 1.0       # Minimum lookahead distance [m]
+    max_lookahead_dist: 3.0       # Maximum lookahead distance [m]
+
+    # Topics
+    odom_topic: "/odom"
+    drive_topic: "/drive"
+    path_topic: "/frenet_path"    # Subscribe to Frenet path from path planner
+    base_frame: "base_link"
+
+    # Path tracking parameters
+    path_timeout: 1.0             # Path timeout [s] - stop if no new path received
+
+    # Debug mode parameters
+    debug_mode: true              # Enable debug mode with visualization
+    velocity_gain: 0.6            # Velocity scaling factor [0.0-1.0] for safe testing
+                                  # 1.0 = full speed, 0.6 = 60% speed
+
+# ===================================================================
+# LQR vs Pure Pursuit vs MPC Comparison
+# ===================================================================
+#
+# LQR (Linear Quadratic Regulator):
+# ✅ FAST: ~1ms computation time (matrix multiplication only)
+# ✅ Optimal: Mathematically proven optimal for linearized system
+# ✅ Stable: Guaranteed stability for linear systems
+# ✅ Simple: Easy to tune with Q and R matrices
+# ⚠️ Local: Assumes small errors (works well in practice)
+#
+# Pure Pursuit:
+# ✅ Very fast: ~0.1ms computation time
+# ⚠️ Less accurate: Geometric approach, not optimal
+# ⚠️ Lookahead sensitivity: Performance depends on lookahead tuning
+#
+# MPC (Model Predictive Control):
+# ⚠️ SLOW: ~50-200ms computation time (optimization at each step)
+# ✅ Optimal: Global optimization over prediction horizon
+# ✅ Constraints: Naturally handles constraints
+# ❌ Real-time issues: May not meet control deadlines
+#
+# ===================================================================
+# Tuning Guidelines
+# ===================================================================
+#
+# For tighter path following (racing):
+# - Increase Q_lateral (15-25)
+# - Increase Q_heading (8-15)
+# - Decrease R_steering (0.5-1.0)
+# - Keep R_steering_rate high (5-10) for stability
+#
+# For smoother/comfortable driving:
+# - Decrease Q_lateral (5-10)
+# - Decrease Q_heading (3-6)
+# - Increase R_steering (1.5-3.0)
+# - Increase R_steering_rate (8-15)
+#
+# For high-speed stability:
+# - Moderate Q_lateral (10-15)
+# - High Q_heading (10-15)
+# - Moderate R_steering (1.0-1.5)
+# - High R_steering_rate (7-12)
+# - Increase lookahead_time (1.0-1.5)
+#
+# For tight corners:
+# - High Q_lateral (20-30)
+# - High Q_heading (12-18)
+# - Low R_steering (0.3-0.8)
+# - Moderate R_steering_rate (4-7)
+# - Decrease lookahead_time (0.5-0.8)
+#
+# Common issues:
+# - Oscillation → Increase R_steering_rate, decrease Q_lateral
+# - Cutting corners → Increase Q_lateral and Q_heading
+# - Overshooting → Increase R_steering_rate, increase lookahead_time
+# - Slow response → Decrease R_steering, decrease lookahead_time
+# - Unstable → Increase R_steering_rate dramatically (10+)
+#
+# ===================================================================
+# Algorithm Explanation
+# ===================================================================
+#
+# LQR solves the optimal control problem:
+#   minimize: J = integral(x'Qx + u'Ru) dt
+#   subject to: dx/dt = Ax + Bu
+#
+# Solution: u = -Kx where K is the optimal gain matrix
+# computed by solving the Discrete Algebraic Riccati Equation (DARE)
+#
+# For path tracking:
+# - State x = [lateral_error, heading_error, velocity_error]
+# - Control u = steering_angle
+# - K is computed once per control cycle (~1ms)
+# - Control is simply: steering = -K * error (instant!)
+#
+# This is MUCH faster than MPC which solves optimization at each step.

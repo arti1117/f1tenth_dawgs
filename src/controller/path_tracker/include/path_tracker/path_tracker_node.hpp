@@ -87,6 +87,9 @@ private:
   double velocity_gain_;
   double debug_min_speed_;
 
+  // Simulation mode parameter
+  bool sim_mode_;  // If true, invert steering for simulation
+
   // Speed control modes
   enum class SpeedMode {
     DEFAULT,           // Use default_speed

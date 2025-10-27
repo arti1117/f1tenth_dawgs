@@ -37,6 +37,10 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     this->declare_parameter<double>("velocity_gain", 1.0);
     this->declare_parameter<double>("debug_min_speed", 0.5);
 
+    // Simulation mode parameter
+    this->declare_parameter<bool>("sim_mode", false);
+    this->declare_parameter<std::string>("sim_odom", "/ego_racecar/odom");
+
     // Speed mode parameters
     this->declare_parameter<std::string>("speed_mode", "default");  // "default", "path_velocity", "curvature"
     this->declare_parameter<double>("friction_coeff", 0.9);
@@ -82,6 +86,9 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     velocity_gain_ = this->get_parameter("velocity_gain").as_double();
     debug_min_speed_ = this->get_parameter("debug_min_speed").as_double();
 
+    // Simulation mode parameter
+    sim_mode_ = this->get_parameter("sim_mode").as_bool();
+
     // Speed mode
     std::string speed_mode_str = this->get_parameter("speed_mode").as_string();
     if (speed_mode_str == "path_velocity") {
@@ -126,6 +133,13 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     }
 
     odom_topic_ = this->get_parameter("odom_topic").as_string();
+
+    // Override odom_topic with sim_odom if sim_mode is enabled
+    if (sim_mode_) {
+        odom_topic_ = this->get_parameter("sim_odom").as_string();
+        RCLCPP_INFO(this->get_logger(), "Simulation mode enabled, using sim_odom topic: %s", odom_topic_.c_str());
+    }
+
     drive_topic_ = this->get_parameter("drive_topic").as_string();
     path_topic_ = this->get_parameter("path_topic").as_string();
     global_path_topic_ = this->get_parameter("global_path_topic").as_string();
@@ -165,12 +179,16 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     lookahead_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("lookahead_point", viz_qos);
 
     RCLCPP_INFO(this->get_logger(), "Path Tracker Node initialized");
+    RCLCPP_INFO(this->get_logger(), "Listening to odom topic: %s", odom_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "Listening to path topic: %s", path_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "Speed mode: %s", speed_mode_str.c_str());
     if (speed_mode_ == SpeedMode::PATH_VELOCITY || speed_mode_ == SpeedMode::OPTIMIZE) {
         RCLCPP_INFO(this->get_logger(), "Listening to global path topic: %s", global_path_topic_.c_str());
     }
     RCLCPP_INFO(this->get_logger(), "Lookahead: base=%.2f m, k=%.2f", lookahead_base_, lookahead_k_);
+    RCLCPP_INFO(this->get_logger(), "Simulation mode: %s (steering will be %s)",
+                sim_mode_ ? "ENABLED" : "disabled",
+                sim_mode_ ? "INVERTED" : "normal");
     RCLCPP_INFO(this->get_logger(), "Debug mode: %s, Velocity gain: %.2f, Min speed: %.2f m/s",
                 debug_mode_ ? "ENABLED" : "disabled", velocity_gain_, debug_min_speed_);
 }
@@ -492,6 +510,11 @@ double PathTrackerNode::computeSteeringAngle(double px, double py, double yaw,
 
     double alpha = std::atan2(y_veh, x_veh);
     double steering = std::atan2(2.0 * wheelbase_ * std::sin(alpha), L);
+
+    // Invert steering for simulation if sim_mode is enabled
+    if (sim_mode_) {
+        steering = -steering;
+    }
 
     return steering;
 }

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lqr_path_follower</name>
+  <version>1.0.0</version>
+  <description>
+    Linear Quadratic Regulator (LQR) based path follower for F1TENTH racing.
+    Provides optimal control with guaranteed stability and MUCH faster computation
+    than MPC (~1ms vs ~50-200ms). Ideal for real-time high-speed path tracking.
+  </description>
+
+  <maintainer email="dawgs@f1tenth.org">F1TENTH DAWGS Team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>eigen</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -399,6 +399,14 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
     std::vector<FrenetTraj> cands;
     if (ref_.empty()) return cands;
 
+    // DEBUG: Log number of obstacles received
+    FRENET_LOG(LogLevel::DEBUG, "[Frenet] Received " << obstacles.size() << " obstacle points");
+    if (!obstacles.empty()) {
+        FRENET_LOG(LogLevel::DEBUG, "[Frenet] First obstacle at: (" << obstacles[0].first << ", " << obstacles[0].second << ")");
+        FRENET_LOG(LogLevel::DEBUG, "[Frenet] Safety parameters: base_radius=" << p_.safety_radius
+                  << ", vehicle_r=" << p_.vehicle_radius << ", obstacle_r=" << p_.obstacle_radius);
+    }
+
     // == Parameter sampling ==
     for (double T : p_.t_samples) {
         for (double df : p_.d_samples) {
@@ -484,6 +492,7 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
 
             // === Enhanced Collision Check ===
             double proximity_cost = 0.0;  // Initialize proximity cost
+            size_t collision_checks = 0;  // Track number of collision checks
 
             if (tr.x.size() > 1) {
                 for (size_t i = 0; i < tr.x.size(); ++i) {
@@ -499,6 +508,7 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
 
                     // Check collision with obstacles
                     for (const auto &ob : obstacles) {
+                        collision_checks++;
                         double dist = distance(tr.x[i], tr.y[i], ob.first, ob.second);
 
                         // Hard collision check
@@ -578,13 +588,14 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                 tr.cost = p_.k_j * j_lat + p_.k_t * T + p_.k_d * dev + p_.k_v * v_err +
                           p_.k_proximity * proximity_cost;
 
-                FRENET_LOG(LogLevel::DEBUG, "[Frenet] Trajectory cost: jerk=" << j_lat
-                          << ", time=" << T << ", dev=" << dev << ", proximity=" << proximity_cost
-                          << " → total=" << tr.cost);
+                FRENET_LOG(LogLevel::DEBUG, "[Frenet] Trajectory (T=" << T << ", df=" << df
+                          << "): NO collision, cost=" << tr.cost << " (proximity=" << proximity_cost
+                          << ", checks=" << collision_checks << ")");
 
                 cands.push_back(std::move(tr));
             } else if (tr.collision) {
-                FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Trajectory rejected due to collision");
+                FRENET_LOG(LogLevel::DEBUG, "[Frenet] Trajectory (T=" << T << ", df=" << df
+                          << ") REJECTED: collision detected after " << collision_checks << " checks");
             }
         }
     }

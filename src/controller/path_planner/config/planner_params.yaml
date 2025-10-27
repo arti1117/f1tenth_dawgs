@@ -6,7 +6,7 @@ path_planner_node:
     # Pre-conditions
     #   - check base_system(f1tenth) map
     #   - run speedopt or global_planner_offline
-    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map_iqp.csv"
+    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1027/mohyun_slam_ekf_iqp.csv"
     # "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_lippboyd_speedopted.csv"
 
 
@@ -21,11 +21,13 @@ path_planner_node:
     frenet_min_time: 1.0           # Minimum time horizon [s]
     frenet_target_speed: 3.0       # Target speed [m/s]
     frenet_dt: 0.05                # Time step for trajectory sampling [s]
-    frenet_max_speed: 15.0         # Maximum allowed speed [m/s]
-    frenet_max_accel: 4.0          # Maximum lateral acceleration [m/s^2]
+    frenet_max_speed: 12.0         # Maximum allowed speed [m/s]
+    frenet_max_accel: 3.0          # Maximum lateral acceleration [m/s^2]
+    frenet_lookahead_distance: 0.5 # Lookahead distance for frenet path starting point [m]
 
     # Lateral sampling (distance from centerline in meters)
-    frenet_d_samples: [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
+    # IMPROVED: Wider lateral sampling for better obstacle avoidance
+    frenet_d_samples: [-1.25, -1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25]
 
     # Time horizon samples (in seconds)
     frenet_t_samples: [1.5, 2.0, 2.5, 3.0]
@@ -36,29 +38,39 @@ path_planner_node:
     frenet_k_deviation: 1.0  # Deviation from centerline weight
     frenet_k_velocity: 1.0   # Velocity error weight
 
+    # Obstacle detection parameters
+    obstacle_cluster_distance: 0.5      # Clustering distance for grouping scan points [m]
+    obstacle_max_box_size: 1.2          # Maximum bounding box size (larger boxes ignored) [m]
+    obstacle_box_safety_margin: 0.4     # Safety margin around detected obstacles [m]
+
     # Safety parameters
-    frenet_safety_radius: 0.9     # Base safety radius around obstacles [m]
-    frenet_road_half_width: 1.2   # Half width of drivable area [m]
+    # IMPROVED: Increased safety radius for better obstacle avoidance
+    frenet_safety_radius: 1.2     # Base safety radius around obstacles [m]
+    frenet_road_half_width: 1.5   # Half width of drivable area [m]
 
     # Enhanced safety parameters
-    frenet_vehicle_radius: 0.5           # Vehicle footprint radius [m]
-    frenet_obstacle_radius: 0.5          # Expected obstacle radius [m]
-    frenet_k_velocity_safety: 0.15       # Velocity-dependent safety gain (safety = base + k*v) [s]
-    frenet_min_safety_margin: 0.25       # Minimum safety margin [m]
-    frenet_k_proximity: 0.5              # Proximity cost weight (penalize paths near obstacles)
-    frenet_proximity_threshold: 1.5      # Distance threshold for proximity cost [m]
-    frenet_interpolation_checks: 3       # Number of intermediate collision checks between samples
+    frenet_vehicle_radius: 0.6           # Vehicle footprint radius [m]
+    frenet_obstacle_radius: 0.6          # Expected obstacle radius [m]
+    frenet_k_velocity_safety: 0.2        # Velocity-dependent safety gain (safety = base + k*v) [s]
+    frenet_min_safety_margin: 0.3        # Minimum safety margin [m]
+    frenet_k_proximity: 2.0              # IMPROVED: Higher proximity cost weight for stronger avoidance
+    frenet_proximity_threshold: 2.5      # IMPROVED: Larger detection threshold [m]
+    frenet_interpolation_checks: 5       # IMPROVED: More collision checks between samples
 
     # Visualization
     visualize_paths: true
     publish_rate: 1.0  # Hz for global path publishing
 
     # Debug log level (0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=VERBOSE)
-    log_level: 1  # Default to ERROR only
+    log_level: 3  # DEBUG level for obstacle avoidance debugging
 
     # Position compensation settings
     expected_computation_time: 0.01  # Expected computation time in seconds (10ms default)
     adaptive_compensation: true  # Enable adaptive computation time estimation
+
+    # Simulation mode parameter
+    sim_mode: false             # Enable simulation mode
+    sim_odom: "/ego_racecar/odom"
 
     # Topics
     odom_topic: "/odom"
