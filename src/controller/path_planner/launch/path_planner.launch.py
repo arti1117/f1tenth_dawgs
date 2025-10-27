@@ -27,12 +27,12 @@ def generate_launch_description():
         # , remappings=[
         #     ('/odom', '/odometry/filtered'),
         # ]
-        , remappings=[
-            ('/odom', '/ego_racecar/odom'),
-        ]
         # , remappings=[
-        #     ('/odom', '/pf/pose/odom'),
+        #     ('/odom', '/ego_racecar/odom'),
         # ]
+        , remappings=[
+            ('/odom', '/pf/pose/odom'),
+        ]
     )
 
     return LaunchDescription([

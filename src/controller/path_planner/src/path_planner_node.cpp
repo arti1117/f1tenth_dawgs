@@ -34,6 +34,8 @@ public:
         declare_parameter<std::string>("csv_file_dir", "");
         declare_parameter<std::string>("csv_file_name", "");
         declare_parameter<std::string>("csv_file_path", ".../global_waypoints_iqp.csv");
+        declare_parameter<bool>("sim_mode", false);
+        declare_parameter<std::string>("sim_odom", "/ego_racecar/odom");
         declare_parameter<std::string>("odom_topic", "/odom");
         declare_parameter<std::string>("planned_path_topic", "/planned_path");
         declare_parameter<std::string>("global_path_topic", "/global_centerline");
@@ -57,6 +59,7 @@ public:
         declare_parameter<double>("frenet_dt", 0.05);
         declare_parameter<double>("frenet_max_speed", 15.0);
         declare_parameter<double>("frenet_max_accel", 4.0);
+        declare_parameter<double>("frenet_lookahead_distance", 2.0);
         declare_parameter<std::vector<double>>("frenet_d_samples", std::vector<double>{-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0});
         declare_parameter<std::vector<double>>("frenet_t_samples", std::vector<double>{1.5, 2.0, 2.5, 3.0});
         declare_parameter<double>("frenet_k_jerk", 0.1);
@@ -65,6 +68,11 @@ public:
         declare_parameter<double>("frenet_k_velocity", 1.0);
         declare_parameter<double>("frenet_safety_radius", 0.3);
         declare_parameter<double>("frenet_road_half_width", 1.2);
+
+        // Obstacle detection parameters
+        declare_parameter<double>("obstacle_cluster_distance", 0.5);
+        declare_parameter<double>("obstacle_max_box_size", 1.0);
+        declare_parameter<double>("obstacle_box_safety_margin", 0.4);
 
         // Enhanced safety parameters
         declare_parameter<double>("frenet_vehicle_radius", 0.2);
@@ -89,7 +97,15 @@ public:
         auto viz_qos = rclcpp::QoS(rclcpp::KeepLast(1));
         viz_qos.best_effort();
 
-        sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(get_parameter("odom_topic").as_string(), sensor_qos,
+        // Get odom topic, use sim_odom if sim_mode is enabled
+        std::string odom_topic = get_parameter("odom_topic").as_string();
+        bool sim_mode = get_parameter("sim_mode").as_bool();
+        if (sim_mode) {
+            odom_topic = get_parameter("sim_odom").as_string();
+            RCLCPP_INFO(get_logger(), "Simulation mode enabled, using sim_odom topic: %s", odom_topic.c_str());
+        }
+
+        sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(odom_topic, sensor_qos,
         std::bind(&PathPlannerNode::odomCallback, this, _1));
 
         sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(get_parameter("scan_topic").as_string(), sensor_qos,
@@ -111,6 +127,9 @@ public:
 
         // Frenet path velocity visualization publisher
         pub_frenet_velocity_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/frenet_path_velocity_markers", viz_qos);
+
+        // Obstacle visualization publisher
+        pub_obstacle_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/obstacle_boxes", viz_qos);
 
         // init planners with parameters from config
         f1tenth::FrenetParams fp;
@@ -184,10 +203,201 @@ public:
 
 
 private:
+    // Obstacle bounding box structure
+    struct ObstacleBox {
+        double center_x, center_y;  // Center position
+        double size;                 // Box size (square)
+        std::vector<std::pair<double, double>> points;  // Original scan points in this cluster
+    };
+
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
     {
         latest_scan_ = *msg;
         have_scan_ = true;
+    }
+
+    // Cluster scan points into obstacle groups using distance-based clustering
+    std::vector<std::vector<std::pair<double, double>>> clusterObstacles(
+        const std::vector<std::pair<double, double>>& points,
+        double cluster_distance = 0.5)  // Points within 0.5m are in same cluster
+    {
+        std::vector<std::vector<std::pair<double, double>>> clusters;
+        std::vector<bool> visited(points.size(), false);
+
+        for (size_t i = 0; i < points.size(); ++i) {
+            if (visited[i]) continue;
+
+            std::vector<std::pair<double, double>> cluster;
+            std::vector<size_t> to_check;
+            to_check.push_back(i);
+
+            while (!to_check.empty()) {
+                size_t current = to_check.back();
+                to_check.pop_back();
+
+                if (visited[current]) continue;
+                visited[current] = true;
+                cluster.push_back(points[current]);
+
+                // Find nearby points
+                for (size_t j = 0; j < points.size(); ++j) {
+                    if (visited[j]) continue;
+
+                    double dx = points[current].first - points[j].first;
+                    double dy = points[current].second - points[j].second;
+                    double dist = std::sqrt(dx * dx + dy * dy);
+
+                    if (dist < cluster_distance) {
+                        to_check.push_back(j);
+                    }
+                }
+            }
+
+            // Only keep clusters with multiple points (filter noise)
+            if (cluster.size() >= 3) {
+                clusters.push_back(cluster);
+            }
+        }
+
+        return clusters;
+    }
+
+    // Convert clusters to bounding boxes
+    std::vector<ObstacleBox> createBoundingBoxes(
+        const std::vector<std::vector<std::pair<double, double>>>& clusters)
+    {
+        std::vector<ObstacleBox> boxes;
+
+        // Get parameters
+        double max_box_size = get_parameter("obstacle_max_box_size").as_double();
+        double safety_margin = get_parameter("obstacle_box_safety_margin").as_double();
+
+        for (const auto& cluster : clusters) {
+            if (cluster.empty()) continue;
+
+            // Find min/max extents
+            double min_x = std::numeric_limits<double>::max();
+            double max_x = std::numeric_limits<double>::lowest();
+            double min_y = std::numeric_limits<double>::max();
+            double max_y = std::numeric_limits<double>::lowest();
+
+            for (const auto& point : cluster) {
+                min_x = std::min(min_x, point.first);
+                max_x = std::max(max_x, point.first);
+                min_y = std::min(min_y, point.second);
+                max_y = std::max(max_y, point.second);
+            }
+
+            // Create square bounding box (use larger dimension)
+            double width = max_x - min_x;
+            double height = max_y - min_y;
+            double size = std::max(width, height);
+
+            // FILTER: Ignore boxes larger than max_box_size (likely walls or large structures)
+            if (size > max_box_size) {
+                RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 5000,
+                    "Ignoring large obstacle box: size=%.2fm (exceeds max=%.2fm)", size, max_box_size);
+                continue;
+            }
+
+            // Add safety margin
+            size += safety_margin;
+
+            ObstacleBox box;
+            box.center_x = (min_x + max_x) / 2.0;
+            box.center_y = (min_y + max_y) / 2.0;
+            box.size = size;
+            box.points = cluster;
+
+            boxes.push_back(box);
+        }
+
+        return boxes;
+    }
+
+    // Visualize obstacle bounding boxes in RViz
+    void visualizeObstacles(const std::vector<ObstacleBox>& obstacles)
+    {
+        visualization_msgs::msg::MarkerArray marker_array;
+
+        // Clear previous markers
+        visualization_msgs::msg::Marker clear_marker;
+        clear_marker.header.frame_id = get_parameter("frame_id").as_string();
+        clear_marker.header.stamp = now();
+        clear_marker.ns = "obstacle_boxes";
+        clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_array.markers.push_back(clear_marker);
+
+        // Create markers for each obstacle
+        for (size_t i = 0; i < obstacles.size(); ++i) {
+            const auto& obs = obstacles[i];
+
+            // Bounding box marker (CUBE)
+            visualization_msgs::msg::Marker box_marker;
+            box_marker.header.frame_id = get_parameter("frame_id").as_string();
+            box_marker.header.stamp = now();
+            box_marker.ns = "obstacle_boxes";
+            box_marker.id = i * 2;  // Even IDs for boxes
+            box_marker.type = visualization_msgs::msg::Marker::CUBE;
+            box_marker.action = visualization_msgs::msg::Marker::ADD;
+
+            box_marker.pose.position.x = obs.center_x;
+            box_marker.pose.position.y = obs.center_y;
+            box_marker.pose.position.z = 0.5;  // Elevate for visibility
+            box_marker.pose.orientation.w = 1.0;
+
+            box_marker.scale.x = obs.size;
+            box_marker.scale.y = obs.size;
+            box_marker.scale.z = 1.0;  // 1m height
+
+            // Red semi-transparent box
+            box_marker.color.r = 1.0;
+            box_marker.color.g = 0.0;
+            box_marker.color.b = 0.0;
+            box_marker.color.a = 0.4;
+
+            marker_array.markers.push_back(box_marker);
+
+            // Boundary outline (LINE_STRIP)
+            visualization_msgs::msg::Marker outline_marker;
+            outline_marker.header.frame_id = get_parameter("frame_id").as_string();
+            outline_marker.header.stamp = now();
+            outline_marker.ns = "obstacle_boxes";
+            outline_marker.id = i * 2 + 1;  // Odd IDs for outlines
+            outline_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+            outline_marker.action = visualization_msgs::msg::Marker::ADD;
+
+            outline_marker.scale.x = 0.05;  // Line width
+            outline_marker.pose.orientation.w = 1.0;
+
+            // Bright red outline
+            outline_marker.color.r = 1.0;
+            outline_marker.color.g = 0.0;
+            outline_marker.color.b = 0.0;
+            outline_marker.color.a = 1.0;
+
+            // Create square outline points
+            double half_size = obs.size / 2.0;
+            geometry_msgs::msg::Point p1, p2, p3, p4, p5;
+            p1.x = obs.center_x - half_size; p1.y = obs.center_y - half_size; p1.z = 0.0;
+            p2.x = obs.center_x + half_size; p2.y = obs.center_y - half_size; p2.z = 0.0;
+            p3.x = obs.center_x + half_size; p3.y = obs.center_y + half_size; p3.z = 0.0;
+            p4.x = obs.center_x - half_size; p4.y = obs.center_y + half_size; p4.z = 0.0;
+            p5 = p1;  // Close the loop
+
+            outline_marker.points.push_back(p1);
+            outline_marker.points.push_back(p2);
+            outline_marker.points.push_back(p3);
+            outline_marker.points.push_back(p4);
+            outline_marker.points.push_back(p5);
+
+            marker_array.markers.push_back(outline_marker);
+        }
+
+        pub_obstacle_markers_->publish(marker_array);
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
+            "Visualized %zu obstacle bounding boxes", obstacles.size());
     }
 
     // Convert laser scan to obstacles in map frame
@@ -197,18 +407,40 @@ private:
 
         if (!have_scan_) return obstacles;
 
-        // Get robot pose from odometry
-        double robot_x = odom_.pose.pose.position.x;
-        double robot_y = odom_.pose.pose.position.y;
+        // Get transform from laser frame to map frame using TF
+        geometry_msgs::msg::TransformStamped transform_stamped;
+        std::string map_frame = get_parameter("frame_id").as_string();
+        std::string laser_frame = latest_scan_.header.frame_id;
 
-        // Get robot yaw from quaternion
-        double qw = odom_.pose.pose.orientation.w;
-        double qx = odom_.pose.pose.orientation.x;
-        double qy = odom_.pose.pose.orientation.y;
-        double qz = odom_.pose.pose.orientation.z;
-        double robot_yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
+        try {
+            // Look up the transform from laser frame to map frame
+            // Use the timestamp from the scan for accurate transform
+            transform_stamped = tf_buffer_->lookupTransform(
+                map_frame, laser_frame,
+                latest_scan_.header.stamp,
+                rclcpp::Duration::from_seconds(0.1));
 
-        // Convert laser scan points to map frame
+            RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+                "Transform lookup successful: %s → %s", laser_frame.c_str(), map_frame.c_str());
+        }
+        catch (tf2::TransformException &ex) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                "Could not transform %s to %s: %s", laser_frame.c_str(), map_frame.c_str(), ex.what());
+            return obstacles;
+        }
+
+        // Extract transform parameters
+        double tx = transform_stamped.transform.translation.x;
+        double ty = transform_stamped.transform.translation.y;
+
+        // Get yaw from quaternion
+        double qw = transform_stamped.transform.rotation.w;
+        double qx = transform_stamped.transform.rotation.x;
+        double qy = transform_stamped.transform.rotation.y;
+        double qz = transform_stamped.transform.rotation.z;
+        double yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
+
+        // Convert laser scan points to map frame using TF transform
         for (size_t i = 0; i < latest_scan_.ranges.size(); ++i) {
             double range = latest_scan_.ranges[i];
 
@@ -216,22 +448,25 @@ private:
             if (std::isnan(range) || std::isinf(range)) continue;
             if (range < latest_scan_.range_min || range > latest_scan_.range_max) continue;
 
-            // Skip far obstacles (only consider nearby obstacles)
-            if (range > 5.0) continue;
+            // IMPROVED: Consider obstacles within 8 meters for better planning horizon
+            if (range > 8.0) continue;
 
             // Calculate angle of this laser beam
             double angle = latest_scan_.angle_min + i * latest_scan_.angle_increment;
 
-            // Convert to map frame
-            double local_x = range * std::cos(angle);
-            double local_y = range * std::sin(angle);
+            // Point in laser frame
+            double laser_x = range * std::cos(angle);
+            double laser_y = range * std::sin(angle);
 
-            // Rotate by robot yaw and translate to robot position
-            double map_x = robot_x + local_x * std::cos(robot_yaw) - local_y * std::sin(robot_yaw);
-            double map_y = robot_y + local_x * std::sin(robot_yaw) + local_y * std::cos(robot_yaw);
+            // Transform to map frame using TF
+            double map_x = tx + laser_x * std::cos(yaw) - laser_y * std::sin(yaw);
+            double map_y = ty + laser_x * std::sin(yaw) + laser_y * std::cos(yaw);
 
             obstacles.push_back({map_x, map_y});
         }
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+            "Transformed %zu scan points to map frame using TF", obstacles.size());
 
         return obstacles;
     }
@@ -547,18 +782,110 @@ private:
             return;
         }
         fs.ds = v;  // Use actual speed
+
+        // IMPROVED: Add lookahead distance to start planning ahead of current position
+        double lookahead_distance = get_parameter("frenet_lookahead_distance").as_double();
+        double original_s = fs.s;
+        fs.s += lookahead_distance;
+
+        // Handle wrapping for closed loops
+        if (frenet_->ref_size() > 0) {
+            // Get total path length from the last waypoint's s-coordinate
+            double total_length = ref_wps_.back().s;
+
+            // Check if path is closed (first and last waypoints are close)
+            double first_last_dist = std::hypot(
+                ref_wps_.front().x - ref_wps_.back().x,
+                ref_wps_.front().y - ref_wps_.back().y
+            );
+            bool is_closed = (first_last_dist < 2.0);
+
+            if (is_closed) {
+                total_length += first_last_dist;
+                // Wrap s if it exceeds total length
+                if (fs.s >= total_length) {
+                    fs.s = std::fmod(fs.s, total_length);
+                }
+            }
+        }
+
         auto frenet_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - frenet_start).count();
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
+            "Lookahead applied: original_s=%.2f, lookahead=%.2f, new_s=%.2f",
+            original_s, lookahead_distance, fs.s);
 
         RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
             "Frenet state: s=%.2f, d=%.2f, ds=%.2f (conversion time: %.3fms)",
             fs.s, fs.d, fs.ds, frenet_time * 1000.0);
 
-        // Get obstacles from laser scan
+        // Get obstacles from laser scan and model as bounding boxes
         auto obstacle_start = std::chrono::steady_clock::now();
-        std::vector<std::pair<double,double>> obstacles = getObstaclesFromScan();
+
+        // Step 1: Get raw scan points in map frame
+        std::vector<std::pair<double,double>> raw_obstacles = getObstaclesFromScan();
+
+        // Step 2: Cluster scan points into obstacle groups
+        double cluster_distance = get_parameter("obstacle_cluster_distance").as_double();
+        auto clusters = clusterObstacles(raw_obstacles, cluster_distance);
+
+        // Step 3: Create bounding boxes for each cluster
+        auto obstacle_boxes = createBoundingBoxes(clusters);
+
+        // Step 4: Visualize bounding boxes in RViz
+        visualizeObstacles(obstacle_boxes);
+
+        // Step 5: Convert bounding boxes to obstacle points for Frenet planner
+        // Sample points around the perimeter of each bounding box
+        std::vector<std::pair<double,double>> obstacles;
+        for (const auto& box : obstacle_boxes) {
+            double half_size = box.size / 2.0;
+            int points_per_side = 8;  // Sample 8 points per side for dense coverage
+
+            // Sample all 4 sides of the square
+            for (int i = 0; i < points_per_side; ++i) {
+                double t = static_cast<double>(i) / (points_per_side - 1);
+
+                // Bottom side
+                obstacles.push_back({
+                    box.center_x - half_size + t * box.size,
+                    box.center_y - half_size
+                });
+
+                // Top side
+                obstacles.push_back({
+                    box.center_x - half_size + t * box.size,
+                    box.center_y + half_size
+                });
+
+                // Left side
+                obstacles.push_back({
+                    box.center_x - half_size,
+                    box.center_y - half_size + t * box.size
+                });
+
+                // Right side
+                obstacles.push_back({
+                    box.center_x + half_size,
+                    box.center_y - half_size + t * box.size
+                });
+            }
+        }
+
         auto obstacle_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - obstacle_start).count();
-        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-            "Detected %zu obstacles from laser scan (time: %.3fms)", obstacles.size(), obstacle_time * 1000.0);
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+            "Obstacles: %zu raw pts → %zu clusters → %zu boxes (filtered) → %zu boundary pts | Time: %.1fms",
+            raw_obstacles.size(), clusters.size(), obstacle_boxes.size(), obstacles.size(), obstacle_time * 1000.0);
+
+        // DEBUG: Log obstacle details
+        if (!obstacles.empty()) {
+            RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
+                "First obstacle point: (%.2f, %.2f), Total obstacles: %zu",
+                obstacles[0].first, obstacles[0].second, obstacles.size());
+        } else {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                "WARNING: No obstacles to pass to Frenet planner!");
+        }
 
         // Initialize best segment container
         std::vector<f1tenth::Waypoint> best_seg;
@@ -568,6 +895,11 @@ private:
 
         if (get_parameter("use_frenet").as_bool()) {
             auto frenet_gen_start = std::chrono::steady_clock::now();
+
+            // DEBUG: Log number of obstacles being passed to Frenet planner
+            RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
+                "Passing %zu obstacle points to Frenet planner", obstacles.size());
+
             // Generate multiple trajectory candidates using Frenet lattice
             auto cands = frenet_->generate(fs, obstacles);
             auto frenet_gen_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - frenet_gen_start).count();
@@ -858,10 +1190,10 @@ private:
             line_marker.header.frame_id = get_parameter("frame_id").as_string();
             line_marker.header.stamp = now();
             line_marker.ns = "frenet_path_velocity";
-            line_marker.id = i;
+            line_marker.id = i + 1;  // Start from 1 (0 is DELETEALL)
             line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
             line_marker.action = visualization_msgs::msg::Marker::ADD;
-            line_marker.scale.x = 0.12;  // Line width (slightly thinner than global path)
+            line_marker.scale.x = 0.25;  // IMPROVED: Thicker line width (25cm) for better visibility
             line_marker.pose.orientation.w = 1.0;
 
             // Average velocity of the segment
@@ -883,22 +1215,49 @@ private:
                 line_marker.color.g = 1.0 - (vel_ratio - 0.5) * 2.0;
                 line_marker.color.b = 0.0;
             }
-            line_marker.color.a = 0.9;  // Slightly more opaque than global path
+            line_marker.color.a = 1.0;  // IMPROVED: Fully opaque for better visibility
 
-            // Add two points for the line segment (slightly elevated for visibility)
+            // Add two points for the line segment (elevated for better visibility)
             geometry_msgs::msg::Point p1, p2;
             p1.x = path.x[i];
             p1.y = path.y[i];
-            p1.z = 0.05;  // Slightly above track level
+            p1.z = 0.15;  // IMPROVED: Higher elevation (15cm) for better visibility above ground
             p2.x = path.x[i + 1];
             p2.y = path.y[i + 1];
-            p2.z = 0.05;  // Slightly above track level
+            p2.z = 0.15;  // IMPROVED: Higher elevation (15cm)
 
             line_marker.points.push_back(p1);
             line_marker.points.push_back(p2);
 
             marker_array.markers.push_back(line_marker);
         }
+
+        // ADDED: Create a single bright marker for the entire path outline (easier to see)
+        visualization_msgs::msg::Marker outline_marker;
+        outline_marker.header.frame_id = get_parameter("frame_id").as_string();
+        outline_marker.header.stamp = now();
+        outline_marker.ns = "frenet_path_outline";
+        outline_marker.id = 0;
+        outline_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+        outline_marker.action = visualization_msgs::msg::Marker::ADD;
+        outline_marker.scale.x = 0.3;  // Even thicker for outline (30cm)
+        outline_marker.pose.orientation.w = 1.0;
+
+        // Bright cyan color for high visibility
+        outline_marker.color.r = 0.0;
+        outline_marker.color.g = 1.0;
+        outline_marker.color.b = 1.0;
+        outline_marker.color.a = 0.7;  // Slightly transparent to not obscure velocity colors
+
+        // Add all path points
+        for (size_t i = 0; i < path.x.size(); ++i) {
+            geometry_msgs::msg::Point p;
+            p.x = path.x[i];
+            p.y = path.y[i];
+            p.z = 0.12;  // Slightly below velocity markers
+            outline_marker.points.push_back(p);
+        }
+        marker_array.markers.push_back(outline_marker);
 
         pub_frenet_velocity_markers_->publish(marker_array);
     }
@@ -953,22 +1312,22 @@ private:
             path_marker.action = visualization_msgs::msg::Marker::ADD;
 
             // Set scale and color based on path index
-            path_marker.scale.x = 0.05;  // Line width
+            path_marker.scale.x = 0.08;  // IMPROVED: Thicker line width (8cm) for better visibility
 
             // Color gradient from red (outer) to green (center) to blue (outer)
             double color_ratio = static_cast<double>(path_idx) / static_cast<double>(all_paths.size() - 1);
             if (path_idx == all_paths.size() / 2) {
-                // Center path (best path) in green
+                // Center path (best path) in bright green
                 path_marker.color.r = 0.0;
                 path_marker.color.g = 1.0;
                 path_marker.color.b = 0.0;
-                path_marker.color.a = 1.0;
+                path_marker.color.a = 1.0;  // Fully opaque for best path
             } else {
                 // Other paths in gradient colors
                 path_marker.color.r = 1.0 - std::abs(color_ratio - 0.5) * 2.0;
                 path_marker.color.g = std::abs(color_ratio - 0.5) * 2.0;
                 path_marker.color.b = 0.5;
-                path_marker.color.a = 0.7;
+                path_marker.color.a = 0.5;  // IMPROVED: More transparent for candidate paths
             }
 
             // Add points to line strip
@@ -999,6 +1358,7 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_velocity_markers_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_frenet_velocity_markers_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_obstacle_markers_;
 
 
     nav_msgs::msg::Path ref_path_;

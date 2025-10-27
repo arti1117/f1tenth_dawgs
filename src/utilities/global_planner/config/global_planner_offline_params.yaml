@@ -9,8 +9,8 @@ global_planner_offline_node:
     # map_dir: "/home/dawgs_nx/forza_ws/src/race_stack/planner/global_planner/maps/levine"
     # map_name: "Budapest_map"
     # map_dir: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/racetracks/Budapest"
-    map_name: "mohyun_1017_2map"
-    map_dir: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/"
+    map_name: "mohyun_slam_ekf"
+    map_dir: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1027/"
     # /home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/map_1009v3_20251009_224402.png
 
     # === TRAJECTORY OPTIMIZATION PARAMETERS ===

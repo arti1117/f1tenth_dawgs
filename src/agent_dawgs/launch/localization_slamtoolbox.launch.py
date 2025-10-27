@@ -47,19 +47,8 @@ def generate_launch_description():
     )
 
     # Map file configuration
-    DeclareLaunchArgument(
-        'map_directory',
-        default_value='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun'
-    ),
-    DeclareLaunchArgument(
-        'map_name',
-        default_value='mohyun_1016_map'
-    ),
-    map_directory = LaunchConfiguration('map_directory')
-    map_name = LaunchConfiguration('map_name')
-
     yaml_file = LaunchConfiguration('yaml_file',
-        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1017/mohyun_1017_2map.yaml'),
+        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1027/mohyun_slam_ekf.yaml'),
 
     declare_use_sim_time_argument = DeclareLaunchArgument(
         'use_sim_time',

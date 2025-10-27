@@ -1,0 +1,94 @@
+mpc_path_follower:
+  ros__parameters:
+    # MPC parameters
+    prediction_horizon: 15        # Number of prediction steps (N)
+    dt: 0.08                      # Time step [s] - 12.5 Hz control frequency
+
+    # Vehicle parameters
+    wheelbase: 0.33               # Vehicle wheelbase [m]
+    max_steering_angle: 0.4189    # Maximum steering angle [rad] (~24 degrees)
+    max_acceleration: 4.0         # Maximum acceleration [m/s²]
+    max_deceleration: 6.0         # Maximum deceleration (braking) [m/s²]
+    max_speed: 8.0                # Maximum speed limit [m/s]
+    min_speed: 0.5                # Minimum speed limit [m/s]
+
+    # Cost function weights (tuning parameters)
+    # Higher weight = more importance in optimization
+
+    # State tracking weights
+    weight_lateral_error: 15.0    # Lateral position error penalty
+                                  # High value → tighter path following
+                                  # Low value → smoother but less precise
+
+    weight_heading_error: 8.0     # Heading angle error penalty
+                                  # High value → more aggressive heading correction
+                                  # Low value → smoother heading transitions
+
+    weight_velocity_error: 2.0    # Velocity tracking error penalty
+                                  # High value → aggressive speed tracking
+                                  # Low value → smoother speed transitions
+
+    # Control effort weights
+    weight_steering: 0.1          # Steering angle magnitude penalty
+                                  # High value → less aggressive steering
+                                  # Low value → more aggressive steering allowed
+
+    weight_acceleration: 0.1      # Acceleration magnitude penalty
+                                  # High value → smoother speed changes
+                                  # Low value → more aggressive acceleration allowed
+
+    # Control rate-of-change weights (smoothness)
+    weight_steering_rate: 2.0     # Steering angle rate-of-change penalty
+                                  # High value → smoother steering transitions
+                                  # Low value → allows rapid steering changes
+                                  # Important for vehicle stability!
+
+    weight_acceleration_rate: 1.0 # Acceleration rate-of-change penalty
+                                  # High value → smoother acceleration/braking
+                                  # Low value → allows rapid speed changes
+
+    # Topics
+    odom_topic: "/odom"
+    drive_topic: "/drive"
+    path_topic: "/frenet_path"    # Subscribe to Frenet path from path planner
+    base_frame: "base_link"
+
+    # Path tracking parameters
+    path_timeout: 1.0             # Path timeout [s] - stop if no new path received
+
+    # Debug mode parameters
+    debug_mode: true              # Enable debug mode with visualization
+    velocity_gain: 0.5            # Velocity scaling factor [0.0-1.0] for safe testing
+                                  # 1.0 = full speed, 0.5 = half speed
+
+# Tuning Guidelines:
+# ====================
+#
+# For tighter path following (racing):
+# - Increase weight_lateral_error (15-25)
+# - Increase weight_heading_error (8-15)
+# - Increase weight_steering_rate (2-5) for stability
+#
+# For smoother/comfortable driving:
+# - Decrease weight_lateral_error (5-10)
+# - Decrease weight_heading_error (3-6)
+# - Increase weight_steering (0.5-1.0)
+# - Increase weight_acceleration (0.5-1.0)
+#
+# For aggressive racing:
+# - High lateral/heading weights (15-25 / 10-15)
+# - Low control effort weights (0.01-0.1)
+# - Moderate rate weights (1-3) to prevent instability
+# - Longer prediction horizon (15-20 steps)
+#
+# For testing/debugging:
+# - Start with moderate weights (all defaults)
+# - Set velocity_gain: 0.3-0.5 for slow testing
+# - Enable debug_mode: true to visualize predictions
+# - Shorter prediction horizon (8-12 steps) for faster computation
+#
+# Common issues:
+# - Oscillation → Increase weight_steering_rate, decrease weight_lateral_error
+# - Cutting corners → Increase weight_lateral_error
+# - Overshooting → Increase weight_steering_rate and weight_heading_error
+# - Slow tracking → Decrease weight_steering, increase weight_velocity_error
