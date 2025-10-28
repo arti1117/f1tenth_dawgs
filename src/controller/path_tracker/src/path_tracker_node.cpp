@@ -6,7 +6,7 @@
 
 using namespace std::chrono_literals;
 
-PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false), global_path_received_(false) {
+PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false), global_path_received_(false), has_drive_cmd_(false) {
     // Declare parameters
     this->declare_parameter<double>("lookahead_base", 1.5);
     this->declare_parameter<double>("lookahead_k", 0.3);
@@ -153,8 +153,8 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     auto path_qos = rclcpp::QoS(rclcpp::KeepLast(10));
     path_qos.reliable();
 
-    // QoS for control commands: Best Effort for real-time response
-    auto control_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    // QoS for control commands: Best Effort for real-time response with larger buffer
+    auto control_qos = rclcpp::QoS(rclcpp::KeepLast(15));
     control_qos.best_effort();
 
     // QoS for visualization: Best Effort, small buffer
@@ -200,8 +200,8 @@ void PathTrackerNode::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
         return;
     }
 
-    // Convert path message to internal representation
-    current_path_.clear();
+    // Convert path message to internal representation (coarse path)
+    std::vector<PathPoint> coarse_path;
     int zero_velocity_count = 0;
     int nonzero_velocity_count = 0;
 
@@ -224,13 +224,18 @@ void PathTrackerNode::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
 
         // Log first 3 points for debugging
         if (i < 3) {
-            RCLCPP_INFO(this->get_logger(),
+            RCLCPP_DEBUG(this->get_logger(),
                 "PATH_CALLBACK: Point[%zu]: pose.z=%.2f → pt.v=%.2f m/s",
                 i, pose.pose.position.z, pt.v);
         }
 
-        current_path_.push_back(pt);
+        coarse_path.push_back(pt);
     }
+
+    // Interpolate path for smoother tracking with low-frequency updates
+    // This densifies the path so tracker has more fine-grained waypoints
+    current_path_.clear();
+    interpolatePath(coarse_path, current_path_, 0.1);  // 10cm resolution
 
     last_path_time_ = this->now();
     path_received_ = true;
@@ -241,9 +246,10 @@ void PathTrackerNode::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
         [](const PathPoint& a, const PathPoint& b) { return a.v < b.v; })).v;
 
     RCLCPP_INFO(this->get_logger(),
-        "PATH_CALLBACK: Received path with %zu points | Velocity stats: min=%.2f, max=%.2f m/s | "
-        "Points with velocity: %d, Points using default: %d",
-        current_path_.size(), min_v, max_v, nonzero_velocity_count, zero_velocity_count);
+        "PATH_CALLBACK: Received path with %zu points → interpolated to %zu points (0.1m resolution) | "
+        "Velocity stats: min=%.2f, max=%.2f m/s | Points with velocity: %d, Points using default: %d",
+        coarse_path.size(), current_path_.size(), min_v, max_v,
+        nonzero_velocity_count, zero_velocity_count);
 }
 
 void PathTrackerNode::globalPathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
@@ -278,13 +284,22 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
             "No valid frenet_path available for tracking (waiting for path_planner)");
 
-        // Publish zero command to stop vehicle
-        ackermann_msgs::msg::AckermannDriveStamped stop_msg;
-        stop_msg.header.stamp = this->now();
-        stop_msg.header.frame_id = base_frame_;
-        stop_msg.drive.steering_angle = 0.0;
-        stop_msg.drive.speed = 0.0;
-        drive_pub_->publish(stop_msg);
+        // Maintain last drive command if available, otherwise stop
+        if (has_drive_cmd_) {
+            last_drive_cmd_.header.stamp = this->now();
+            drive_pub_->publish(last_drive_cmd_);
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "Maintaining last drive command while waiting for path (speed=%.2f, steering=%.3f)",
+                last_drive_cmd_.drive.speed, last_drive_cmd_.drive.steering_angle);
+        } else {
+            // No previous command, must stop
+            ackermann_msgs::msg::AckermannDriveStamped stop_msg;
+            stop_msg.header.stamp = this->now();
+            stop_msg.header.frame_id = base_frame_;
+            stop_msg.drive.steering_angle = 0.0;
+            stop_msg.drive.speed = 0.0;
+            drive_pub_->publish(stop_msg);
+        }
         return;
     }
 
@@ -292,15 +307,24 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
     double path_age = (this->now() - last_path_time_).seconds();
     if (path_age > path_timeout_) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-            "Path is stale (%.2f s old), waiting for new path", path_age);
+            "Path is stale (%.2f s old), maintaining last drive command", path_age);
 
-        // Publish zero command to stop vehicle
-        ackermann_msgs::msg::AckermannDriveStamped stop_msg;
-        stop_msg.header.stamp = this->now();
-        stop_msg.header.frame_id = base_frame_;
-        stop_msg.drive.steering_angle = 0.0;
-        stop_msg.drive.speed = 0.0;
-        drive_pub_->publish(stop_msg);
+        // Maintain last drive command during path timeout (path planner is computing new path)
+        if (has_drive_cmd_) {
+            last_drive_cmd_.header.stamp = this->now();
+            drive_pub_->publish(last_drive_cmd_);
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                "Publishing buffered drive command (speed=%.2f, steering=%.3f)",
+                last_drive_cmd_.drive.speed, last_drive_cmd_.drive.steering_angle);
+        } else {
+            // No previous command, must stop
+            ackermann_msgs::msg::AckermannDriveStamped stop_msg;
+            stop_msg.header.stamp = this->now();
+            stop_msg.header.frame_id = base_frame_;
+            stop_msg.drive.steering_angle = 0.0;
+            stop_msg.drive.speed = 0.0;
+            drive_pub_->publish(stop_msg);
+        }
         return;
     }
 
@@ -411,6 +435,10 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 
     drive_pub_->publish(drive_msg);
 
+    // Store this command as the last valid drive command
+    last_drive_cmd_ = drive_msg;
+    has_drive_cmd_ = true;
+
     // Update previous commanded speed and steering for next cycle
     prev_commanded_speed_ = commanded_speed;
     prev_steering_for_accel_ = steering;
@@ -513,7 +541,7 @@ double PathTrackerNode::computeSteeringAngle(double px, double py, double yaw,
 
     // Invert steering for simulation if sim_mode is enabled
     if (sim_mode_) {
-        // steering = -steering;
+        steering = -steering;
     }
 
     return steering;
@@ -1060,6 +1088,61 @@ double PathTrackerNode::applySteeringFilter(double raw_steering) {
         raw_steering, filtered_steering, steering_alpha_);
 
     return filtered_steering;
+}
+
+void PathTrackerNode::interpolatePath(const std::vector<PathPoint>& coarse_path,
+                                       std::vector<PathPoint>& fine_path,
+                                       double resolution) {
+    fine_path.clear();
+
+    if (coarse_path.size() < 2) {
+        fine_path = coarse_path;
+        return;
+    }
+
+    // Reserve approximate space (overestimate is OK)
+    fine_path.reserve(coarse_path.size() * 5);
+
+    for (size_t i = 0; i < coarse_path.size() - 1; ++i) {
+        const PathPoint& p1 = coarse_path[i];
+        const PathPoint& p2 = coarse_path[i + 1];
+
+        // Calculate distance between consecutive points
+        double dx = p2.x - p1.x;
+        double dy = p2.y - p1.y;
+        double segment_length = std::hypot(dx, dy);
+
+        // Calculate number of interpolated points needed
+        int num_points = static_cast<int>(std::ceil(segment_length / resolution));
+        num_points = std::max(1, num_points);
+
+        // Add interpolated points
+        for (int j = 0; j < num_points; ++j) {
+            double t = static_cast<double>(j) / num_points;
+
+            PathPoint pt;
+            pt.x = p1.x + t * dx;
+            pt.y = p1.y + t * dy;
+
+            // Linear interpolation for yaw (handle angle wrapping)
+            double dyaw = p2.yaw - p1.yaw;
+            while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+            while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+            pt.yaw = p1.yaw + t * dyaw;
+
+            // Linear interpolation for velocity
+            pt.v = p1.v + t * (p2.v - p1.v);
+
+            fine_path.push_back(pt);
+        }
+    }
+
+    // Add the last point
+    fine_path.push_back(coarse_path.back());
+
+    RCLCPP_DEBUG(this->get_logger(),
+        "Interpolated path: %zu coarse points → %zu fine points (resolution=%.2fm)",
+        coarse_path.size(), fine_path.size(), resolution);
 }
 
 int main(int argc, char **argv) {

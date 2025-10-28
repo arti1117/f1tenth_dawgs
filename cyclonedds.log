@@ -1,1 +1,1 @@
-1761577610.042621 [0] path_track: using network interface wlan0 (udp/192.168.3.53) selected arbitrarily from: wlan0, docker0
+1761637467.059998 [0]       ros2: using network interface eth0 (udp/192.168.1.112) selected arbitrarily from: eth0, wlan0, docker0
