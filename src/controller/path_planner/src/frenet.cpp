@@ -106,7 +106,7 @@ bool FrenetPlanner::cart2frenet(double x, double y, size_t &best_seg_idx, Frenet
     return false;
   }
 
-  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Path has " << ref_.size() << " waypoints, closed="
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Path has " << ref_.size() << " waypoints, closed="
             << is_closed_loop_ << ", total_length=" << total_length_);
 
   // Use KD-tree to find nearest waypoint quickly
@@ -120,7 +120,7 @@ bool FrenetPlanner::cart2frenet(double x, double y, size_t &best_seg_idx, Frenet
   double best_d = 0.0;
   bool found = false;
 
-  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Searching ±" << search_window << " segments around nearest idx="
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Searching ±" << search_window << " segments around nearest idx="
             << nearest_idx);
 
   // Search locally around nearest point for best projection
@@ -172,18 +172,18 @@ bool FrenetPlanner::cart2frenet(double x, double y, size_t &best_seg_idx, Frenet
       double proj_dist = t * std::sqrt(seg_norm2);
       best_s = s_at_i + proj_dist;
 
-      FRENET_LOG(LogLevel::DEBUG, "[Frenet]   NEW BEST! s_at_i=" << s_at_i << ", proj_dist="
+      FRENET_LOG(LogLevel::VERBOSE, "[Frenet]   NEW BEST! s_at_i=" << s_at_i << ", proj_dist="
                 << proj_dist << ", best_s=" << best_s);
 
       // For closed loops, handle wrapping when on the closing segment
       if (is_closed_loop_ && static_cast<size_t>(i) == ref_.size() - 1) {
         // On closing segment (last->first)
         best_s = ref_.back().s + proj_dist;
-        FRENET_LOG(LogLevel::DEBUG, "[Frenet]   Closing segment detected! Adjusted best_s=" << best_s);
+        FRENET_LOG(LogLevel::VERBOSE, "[Frenet]   Closing segment detected! Adjusted best_s=" << best_s);
         // Wrap s if it exceeds total length
         if (best_s >= total_length_) {
           best_s = std::fmod(best_s, total_length_);
-          FRENET_LOG(LogLevel::DEBUG, "[Frenet]   Wrapped s to " << best_s);
+          FRENET_LOG(LogLevel::VERBOSE, "[Frenet]   Wrapped s to " << best_s);
         }
       }
 
@@ -209,7 +209,7 @@ bool FrenetPlanner::cart2frenet(double x, double y, size_t &best_seg_idx, Frenet
     double original_s = best_s;
     best_s = std::fmod(best_s + total_length_, total_length_);  // Handle negative s
     if (original_s != best_s) {
-      FRENET_LOG(LogLevel::DEBUG, "[Frenet] Final wrapping: " << original_s << " -> " << best_s);
+      FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Final wrapping: " << original_s << " -> " << best_s);
     }
   }
 
@@ -220,7 +220,7 @@ bool FrenetPlanner::cart2frenet(double x, double y, size_t &best_seg_idx, Frenet
   out.dd = 0.0;
   out.ddd = 0.0;
 
-  FRENET_LOG(LogLevel::DEBUG, "[Frenet] SUCCESS: s=" << out.s << ", d=" << out.d
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] SUCCESS: s=" << out.s << ", d=" << out.d
             << ", seg_idx=" << best_seg_idx << ", dist=" << best_dist << " m");
   FRENET_LOG(LogLevel::VERBOSE, "[Frenet] ===== cart2frenet complete =====\n");
 
@@ -243,19 +243,19 @@ bool FrenetPlanner::frenet2cart(double s, double d, double &x, double &y, double
     s_wrapped = std::fmod(s, total_length_);
     if (s_wrapped < 0) s_wrapped += total_length_;
     if (s != s_wrapped) {
-      FRENET_LOG(LogLevel::DEBUG, "[Frenet] Wrapped s: " << s << " -> " << s_wrapped
+      FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Wrapped s: " << s << " -> " << s_wrapped
                 << " (total_length=" << total_length_ << ")");
     }
   }
 
   // Handle closing segment for closed paths
   double first_last_dist = is_closed_loop_ ? distance(ref_.front().x, ref_.front().y, ref_.back().x, ref_.back().y) : 0;
-  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Closed loop: " << is_closed_loop_
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Closed loop: " << is_closed_loop_
             << ", last_s=" << ref_.back().s
             << ", first_last_dist=" << first_last_dist);
 
   if (is_closed_loop_ && s_wrapped >= ref_.back().s) {
-    FRENET_LOG(LogLevel::DEBUG, "[Frenet] Point is on closing segment (last->first)");
+    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Point is on closing segment (last->first)");
     // Point is on the closing segment (last -> first)
     double s_on_closing = s_wrapped - ref_.back().s;
     double closing_length = first_last_dist;
@@ -278,7 +278,7 @@ bool FrenetPlanner::frenet2cart(double s, double d, double &x, double &y, double
       y = cy + ny * d;
       yaw = cyaw;
 
-      FRENET_LOG(LogLevel::DEBUG, "[Frenet] Closing segment result: x=" << x << ", y=" << y
+      FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Closing segment result: x=" << x << ", y=" << y
                 << ", yaw=" << yaw << " rad");
       FRENET_LOG(LogLevel::VERBOSE, "[Frenet] ===== frenet2cart complete =====\n");
       return true;
@@ -329,7 +329,7 @@ bool FrenetPlanner::frenet2cart(double s, double d, double &x, double &y, double
   y = cy + ny * d;
   yaw = cyaw;
 
-  FRENET_LOG(LogLevel::DEBUG, "[Frenet] Normal segment result: x=" << x << ", y=" << y
+  FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Normal segment result: x=" << x << ", y=" << y
             << ", yaw=" << yaw << " rad");
   FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Segment " << idx << "->" << (idx+1) % ref_.size()
             << ", r=" << r << ", center=(" << cx << "," << cy << ")");
@@ -399,11 +399,11 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
     std::vector<FrenetTraj> cands;
     if (ref_.empty()) return cands;
 
-    // DEBUG: Log number of obstacles received
-    FRENET_LOG(LogLevel::DEBUG, "[Frenet] Received " << obstacles.size() << " obstacle points");
+    // Log obstacles summary (important for debugging)
+    FRENET_LOG(LogLevel::INFO, "[Frenet] 🎯 Generating trajectories with " << obstacles.size() << " obstacle points");
     if (!obstacles.empty()) {
         FRENET_LOG(LogLevel::DEBUG, "[Frenet] First obstacle at: (" << obstacles[0].first << ", " << obstacles[0].second << ")");
-        FRENET_LOG(LogLevel::DEBUG, "[Frenet] Safety parameters: base_radius=" << p_.safety_radius
+        FRENET_LOG(LogLevel::VERBOSE, "[Frenet] Safety parameters: base_radius=" << p_.safety_radius
                   << ", vehicle_r=" << p_.vehicle_radius << ", obstacle_r=" << p_.obstacle_radius);
     }
 
@@ -514,7 +514,7 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                         // Hard collision check
                         if (dist < dynamic_safety) {
                             tr.collision = true;
-                            FRENET_LOG(LogLevel::DEBUG, "[Frenet] COLLISION at point " << i
+                            FRENET_LOG(LogLevel::VERBOSE, "[Frenet] COLLISION at point " << i
                                       << ": dist=" << dist << " < safety=" << dynamic_safety);
                             break;
                         }
@@ -532,7 +532,7 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                     // Road boundary check
                     if (std::abs(tr.d[i]) > p_.road_half_width) {
                         tr.collision = true;
-                        FRENET_LOG(LogLevel::DEBUG, "[Frenet] OUT OF BOUNDS at point " << i
+                        FRENET_LOG(LogLevel::VERBOSE, "[Frenet] OUT OF BOUNDS at point " << i
                                   << ": d=" << tr.d[i] << " > width=" << p_.road_half_width);
                         break;
                     }
@@ -552,7 +552,7 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                                 double dist_interp = distance(x_interp, y_interp, ob.first, ob.second);
                                 if (dist_interp < dynamic_safety) {
                                     tr.collision = true;
-                                    FRENET_LOG(LogLevel::DEBUG, "[Frenet] INTERPOLATED COLLISION between points "
+                                    FRENET_LOG(LogLevel::VERBOSE, "[Frenet] INTERPOLATED COLLISION between points "
                                               << (i-1) << "-" << i << ", interp " << j);
                                     break;
                                 }
@@ -561,7 +561,7 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                             // Road boundary for interpolated points
                             if (std::abs(d_interp) > p_.road_half_width) {
                                 tr.collision = true;
-                                FRENET_LOG(LogLevel::DEBUG, "[Frenet] INTERPOLATED OUT OF BOUNDS: d="
+                                FRENET_LOG(LogLevel::VERBOSE, "[Frenet] INTERPOLATED OUT OF BOUNDS: d="
                                           << d_interp);
                                 break;
                             }
@@ -588,17 +588,24 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                 tr.cost = p_.k_j * j_lat + p_.k_t * T + p_.k_d * dev + p_.k_v * v_err +
                           p_.k_proximity * proximity_cost;
 
-                FRENET_LOG(LogLevel::DEBUG, "[Frenet] Trajectory (T=" << T << ", df=" << df
-                          << "): NO collision, cost=" << tr.cost << " (proximity=" << proximity_cost
-                          << ", checks=" << collision_checks << ")");
+                FRENET_LOG(LogLevel::DEBUG, "[Frenet] ✅ Candidate (T=" << T << ", df=" << df
+                          << "): cost=" << tr.cost << " (prox=" << proximity_cost << ")");
 
                 cands.push_back(std::move(tr));
             } else if (tr.collision) {
-                FRENET_LOG(LogLevel::DEBUG, "[Frenet] Trajectory (T=" << T << ", df=" << df
-                          << ") REJECTED: collision detected after " << collision_checks << " checks");
+                FRENET_LOG(LogLevel::VERBOSE, "[Frenet] ❌ Rejected (T=" << T << ", df=" << df
+                          << "): collision after " << collision_checks << " checks");
             }
         }
     }
+
+    // Summary of generated candidates
+    size_t collision_free = 0;
+    for(const auto& c : cands) {
+        if(!c.collision) collision_free++;
+    }
+    FRENET_LOG(LogLevel::INFO, "[Frenet] 📊 Generated " << cands.size() << " candidates ("
+              << collision_free << " collision-free, " << (cands.size() - collision_free) << " collisions)");
 
     return cands;
 }
@@ -613,6 +620,13 @@ std::optional<FrenetTraj> FrenetPlanner::select_best(const std::vector<FrenetTra
     for(size_t i=0;i<cands.size();++i){
         if(!cands[i].collision && cands[i].cost < best){ best=cands[i].cost; bi=i; }
     }
-    if(bi==std::numeric_limits<size_t>::max()) return std::nullopt;
+
+    if(bi==std::numeric_limits<size_t>::max()) {
+        FRENET_LOG(LogLevel::WARN, "[Frenet] ❌ No valid trajectory found!");
+        return std::nullopt;
+    }
+
+    FRENET_LOG(LogLevel::INFO, "[Frenet] ✅ Selected best trajectory: cost=" << best
+              << ", points=" << cands[bi].x.size());
     return cands[bi];
 }

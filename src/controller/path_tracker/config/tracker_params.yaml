@@ -1,8 +1,8 @@
 path_tracker_node:
   ros__parameters:
     # Pure pursuit parameters
-    lookahead_base: 1.4         # Base lookahead distance [m]
-    lookahead_k: 0.8            # Speed-dependent lookahead gain
+    lookahead_base: 0.3         # Base lookahead distance [m]
+    lookahead_k: 0.4            # Speed-dependent lookahead gain
     use_speed_lookahead: true   # Enable speed-dependent lookahead
 
     # Adaptive lookahead parameters
@@ -15,11 +15,11 @@ path_tracker_node:
 
     # Stanley controller parameters (for cutting suppression)
     use_stanley: true            # Enable Stanley term addition to Pure Pursuit
-    stanley_k: 0.5               # Stanley gain for lateral error correction
+    stanley_k: 0.8             # Stanley gain for lateral error correction
 
     # Steering filter parameters (for smooth control)
     use_steering_filter: true    # Enable low-pass filter on steering commands
-    steering_alpha: 0.5          # Filter coefficient (0-1): higher = more responsive, lower = smoother
+    steering_alpha: 0.7          # Filter coefficient (0-1): higher = more responsive, lower = smoother
 
     # Vehicle parameters
     wheelbase: 0.33             # Vehicle wheelbase [m]
@@ -30,12 +30,12 @@ path_tracker_node:
     path_timeout: 1.0           # Path timeout [s] - stop if no new path received
 
     # Debug mode parameters
-    debug_mode: true            # Enable debug mode with verbose logging
-    velocity_gain: 0.2          # Velocity scaling factor [0.0-1.0] for debugging (1.0 = full speed)
+    debug_mode: true           # CHANGED: Disable debug mode for full performance
+    velocity_gain: 0.2          # CHANGED: Full velocity (was 0.2 = 20% speed limit)
     debug_min_speed: 0.5        # Minimum speed in debug mode [m/s] (overrides min_speed_limit)
 
     # Simulation mode parameter
-    sim_mode: false             # Enable simulation mode (inverts steering for simulation compatibility)
+    sim_mode: true             # Enable simulation mode (inverts steering for simulation compatibility)
     sim_odom: "/ego_racecar/odom"
 
     # Speed control mode
@@ -58,8 +58,8 @@ path_tracker_node:
     max_total_acceleration: 12.0    # Maximum total acceleration (friction circle limit) [m/s^2] (1g default)
 
     # Topics
-    odom_topic: "/odom"
+    odom_topic: "/pf/pose/odom"   # default was /odom
     drive_topic: "/drive"
-    path_topic: "/frenet_path"         # Subscribe to Frenet path from path planner
+    path_topic: "/planned_path"        # CRITICAL FIX: Subscribe to BEST PATH (was /frenet_path) planned_path
     global_path_topic: "/global_centerline"  # Global path with velocity info (for path_velocity mode)
     base_frame: "base_link"

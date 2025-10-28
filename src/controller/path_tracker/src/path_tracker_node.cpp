@@ -513,7 +513,7 @@ double PathTrackerNode::computeSteeringAngle(double px, double py, double yaw,
 
     // Invert steering for simulation if sim_mode is enabled
     if (sim_mode_) {
-        steering = -steering;
+        // steering = -steering;
     }
 
     return steering;

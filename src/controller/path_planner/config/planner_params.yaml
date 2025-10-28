@@ -10,9 +10,8 @@ path_planner_node:
     # "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_lippboyd_speedopted.csv"
 
 
-
     # Planner settings
-    use_lattice: true
+    use_lattice: false              # DISABLED: Lattice causes planned_path to diverge from frenet_path
     use_frenet: true
     planner_horizon: 3.0
 
@@ -26,8 +25,8 @@ path_planner_node:
     frenet_lookahead_distance: 0.5 # Lookahead distance for frenet path starting point [m]
 
     # Lateral sampling (distance from centerline in meters)
-    # IMPROVED: Wider lateral sampling for better obstacle avoidance
-    frenet_d_samples: [-1.25, -1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25]
+    # NARROW RANGE: Reduced to ±1.0m for tighter obstacle avoidance
+    frenet_d_samples: [-1.0, -0.7, -0.4, -0.2, 0.0, 0.2, 0.4, 0.7, 1.0]
 
     # Time horizon samples (in seconds)
     frenet_t_samples: [1.5, 2.0, 2.5, 3.0]
@@ -35,45 +34,45 @@ path_planner_node:
     # Cost function weights
     frenet_k_jerk: 0.1       # Jerk (smoothness) weight
     frenet_k_time: 0.1       # Time weight (prefer faster trajectories)
-    frenet_k_deviation: 1.0  # Deviation from centerline weight
+    frenet_k_deviation: 1.5  # INCREASED: Higher centerline preference to reduce avoidance distance
     frenet_k_velocity: 1.0   # Velocity error weight
 
     # Obstacle detection parameters
     obstacle_cluster_distance: 0.5      # Clustering distance for grouping scan points [m]
-    obstacle_max_box_size: 1.2          # Maximum bounding box size (larger boxes ignored) [m]
-    obstacle_box_safety_margin: 0.4     # Safety margin around detected obstacles [m]
+    obstacle_max_box_size: 0.8          # Only for obstacles
+    obstacle_box_safety_margin: 0.3     # Safety margin around detected obstacles [m]
 
     # Safety parameters
-    # IMPROVED: Increased safety radius for better obstacle avoidance
-    frenet_safety_radius: 1.2     # Base safety radius around obstacles [m]
+    # BALANCED: Moderate avoidance distance to prevent collisions without excessive detours
+    frenet_safety_radius: 0.15    # Hard collision base radius [m]
     frenet_road_half_width: 1.5   # Half width of drivable area [m]
 
     # Enhanced safety parameters
-    frenet_vehicle_radius: 0.6           # Vehicle footprint radius [m]
-    frenet_obstacle_radius: 0.6          # Expected obstacle radius [m]
-    frenet_k_velocity_safety: 0.2        # Velocity-dependent safety gain (safety = base + k*v) [s]
-    frenet_min_safety_margin: 0.3        # Minimum safety margin [m]
-    frenet_k_proximity: 2.0              # IMPROVED: Higher proximity cost weight for stronger avoidance
-    frenet_proximity_threshold: 2.5      # IMPROVED: Larger detection threshold [m]
-    frenet_interpolation_checks: 5       # IMPROVED: More collision checks between samples
+    frenet_vehicle_radius: 0.05          # Vehicle footprint radius [m] - F1TENTH car width ~0.2m
+    frenet_obstacle_radius: 0.10         # Expected obstacle radius [m]
+    frenet_k_velocity_safety: 0.05       # Velocity-dependent safety gain
+    frenet_min_safety_margin: 0.25       # Minimum safety margin [m]
+    frenet_k_proximity: 5.0              # REDUCED 20.0→5.0: Lower proximity cost for tighter avoidance
+    frenet_proximity_threshold: 3.0      # REDUCED 4.0→3.0: Narrower soft cost range
+    frenet_interpolation_checks: 5       # More collision checks between samples
 
     # Visualization
     visualize_paths: true
     publish_rate: 1.0  # Hz for global path publishing
 
     # Debug log level (0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=VERBOSE)
-    log_level: 3  # DEBUG level for obstacle avoidance debugging
+    log_level: 4  # DEBUG level for detailed obstacle avoidance debugging
 
     # Position compensation settings
     expected_computation_time: 0.01  # Expected computation time in seconds (10ms default)
     adaptive_compensation: true  # Enable adaptive computation time estimation
 
     # Simulation mode parameter
-    sim_mode: false             # Enable simulation mode
+    sim_mode: true             # Enable simulation mode
     sim_odom: "/ego_racecar/odom"
 
     # Topics
-    odom_topic: "/odom"
+    odom_topic: "/pf/pose/odom" # default was /odom
     scan_topic: "/scan"
     planned_path_topic: "/planned_path"
     global_path_topic: "/global_centerline"  # Published if CSV loaded

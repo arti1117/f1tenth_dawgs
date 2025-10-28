@@ -133,16 +133,13 @@ class GymBridge(Node):
         # transform broadcaster
         self.br = TransformBroadcaster(self)
 
-        # publishers
-        self.ego_scan_pub = self.create_publisher(LaserScan, ego_scan_topic, 10)
-        self.ego_odom_pub = self.create_publisher(Odometry, ego_odom_topic, 10)
-        self.ego_drive_published = False
-        if num_agents == 2:
-            self.opp_scan_pub = self.create_publisher(LaserScan, opp_scan_topic, 10)
-            self.ego_opp_odom_pub = self.create_publisher(Odometry, ego_opp_odom_topic, 10)
-            self.opp_odom_pub = self.create_publisher(Odometry, opp_odom_topic, 10)
-            self.opp_ego_odom_pub = self.create_publisher(Odometry, opp_ego_odom_topic, 10)
-            self.opp_drive_published = False
+        # QoS for sensor data: Best Effort for low latency (matches path_planner and path_tracker)
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
 
         # QoS for drive commands: Best Effort, Volatile for real-time response
         drive_qos = QoSProfile(
@@ -151,6 +148,17 @@ class GymBridge(Node):
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
+
+        # publishers
+        self.ego_scan_pub = self.create_publisher(LaserScan, ego_scan_topic, sensor_qos)
+        self.ego_odom_pub = self.create_publisher(Odometry, ego_odom_topic, sensor_qos)
+        self.ego_drive_published = False
+        if num_agents == 2:
+            self.opp_scan_pub = self.create_publisher(LaserScan, opp_scan_topic, sensor_qos)
+            self.ego_opp_odom_pub = self.create_publisher(Odometry, ego_opp_odom_topic, sensor_qos)
+            self.opp_odom_pub = self.create_publisher(Odometry, opp_odom_topic, sensor_qos)
+            self.opp_ego_odom_pub = self.create_publisher(Odometry, opp_ego_odom_topic, sensor_qos)
+            self.opp_drive_published = False
 
         # subscribers
         self.ego_drive_sub = self.create_subscription(

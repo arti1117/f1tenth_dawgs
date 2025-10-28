@@ -815,8 +815,8 @@ private:
             "Lookahead applied: original_s=%.2f, lookahead=%.2f, new_s=%.2f",
             original_s, lookahead_distance, fs.s);
 
-        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-            "Frenet state: s=%.2f, d=%.2f, ds=%.2f (conversion time: %.3fms)",
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+            "📍 Frenet state: s=%.2f, d=%.2f, ds=%.2f (d>0=LEFT, d<0=RIGHT) | conversion: %.3fms",
             fs.s, fs.d, fs.ds, frenet_time * 1000.0);
 
         // Get obstacles from laser scan and model as bounding boxes
@@ -835,9 +835,11 @@ private:
         // Step 4: Visualize bounding boxes in RViz
         visualizeObstacles(obstacle_boxes);
 
-        // Step 5: Convert bounding boxes to obstacle points for Frenet planner
-        // Sample points around the perimeter of each bounding box
+        // Step 5: Convert obstacles to points for Frenet planner
+        // IMPROVED: Include both bounding boxes AND raw scan points (for walls/map)
         std::vector<std::pair<double,double>> obstacles;
+
+        // 5a. Add bounding box perimeter samples (for clustered dynamic obstacles)
         for (const auto& box : obstacle_boxes) {
             double half_size = box.size / 2.0;
             int points_per_side = 8;  // Sample 8 points per side for dense coverage
@@ -845,46 +847,49 @@ private:
             // Sample all 4 sides of the square
             for (int i = 0; i < points_per_side; ++i) {
                 double t = static_cast<double>(i) / (points_per_side - 1);
+                obstacles.push_back({box.center_x - half_size + t * box.size, box.center_y - half_size});
+                obstacles.push_back({box.center_x - half_size + t * box.size, box.center_y + half_size});
+                obstacles.push_back({box.center_x - half_size, box.center_y - half_size + t * box.size});
+                obstacles.push_back({box.center_x + half_size, box.center_y - half_size + t * box.size});
+            }
+        }
 
-                // Bottom side
-                obstacles.push_back({
-                    box.center_x - half_size + t * box.size,
-                    box.center_y - half_size
-                });
-
-                // Top side
-                obstacles.push_back({
-                    box.center_x - half_size + t * box.size,
-                    box.center_y + half_size
-                });
-
-                // Left side
-                obstacles.push_back({
-                    box.center_x - half_size,
-                    box.center_y - half_size + t * box.size
-                });
-
-                // Right side
-                obstacles.push_back({
-                    box.center_x + half_size,
-                    box.center_y - half_size + t * box.size
-                });
+        // 5b. Add raw scan points (for walls, map boundaries, and unclustered obstacles)
+        // Filter: only include points within reasonable distance from vehicle
+        const double max_obstacle_dist = 8.0;  // meters
+        const double min_obstacle_dist = 0.1;  // meters (too close = sensor noise)
+        size_t raw_added = 0;
+        for (const auto& pt : raw_obstacles) {
+            double dist = std::hypot(pt.first - x_compensated, pt.second - y_compensated);
+            if (dist >= min_obstacle_dist && dist <= max_obstacle_dist) {
+                obstacles.push_back(pt);
+                raw_added++;
             }
         }
 
         auto obstacle_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - obstacle_start).count();
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
-            "Obstacles: %zu raw pts → %zu clusters → %zu boxes (filtered) → %zu boundary pts | Time: %.1fms",
-            raw_obstacles.size(), clusters.size(), obstacle_boxes.size(), obstacles.size(), obstacle_time * 1000.0);
+            "Obstacles: %zu raw scan → %zu clusters → %zu boxes → %zu box edges + %zu raw filtered = %zu total | Time: %.1fms",
+            raw_obstacles.size(), clusters.size(), obstacle_boxes.size(),
+            obstacle_boxes.size() * 32, raw_added, obstacles.size(), obstacle_time * 1000.0);
 
-        // DEBUG: Log obstacle details
+        // CRITICAL DEBUG: Log obstacle details with positions
         if (!obstacles.empty()) {
-            RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-                "First obstacle point: (%.2f, %.2f), Total obstacles: %zu",
-                obstacles[0].first, obstacles[0].second, obstacles.size());
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                "🚧 Obstacles detected! Count: %zu, First at: (%.2f, %.2f), Vehicle at: (%.2f, %.2f)",
+                obstacles.size(), obstacles[0].first, obstacles[0].second, x_compensated, y_compensated);
+
+            // Log first 3 obstacles for debugging
+            for(size_t i = 0; i < std::min(size_t(3), obstacles.size()); ++i) {
+                double dist_to_vehicle = std::hypot(obstacles[i].first - x_compensated,
+                                                     obstacles[i].second - y_compensated);
+                RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                    "  Obstacle[%zu]: (%.2f, %.2f), dist_from_vehicle: %.2fm",
+                    i, obstacles[i].first, obstacles[i].second, dist_to_vehicle);
+            }
         } else {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                "WARNING: No obstacles to pass to Frenet planner!");
+                "⚠️ WARNING: No obstacles to pass to Frenet planner!");
         }
 
         // Initialize best segment container
@@ -903,8 +908,9 @@ private:
             // Generate multiple trajectory candidates using Frenet lattice
             auto cands = frenet_->generate(fs, obstacles);
             auto frenet_gen_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - frenet_gen_start).count();
+
             RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-                "Generated %zu Frenet trajectory candidates (time: %.3fms)", cands.size(), frenet_gen_time * 1000.0);
+                "Frenet generation time: %.1fms", frenet_gen_time * 1000.0);
 
             // Select best trajectory (considers obstacles and cost)
             auto select_start = std::chrono::steady_clock::now();
@@ -912,7 +918,7 @@ private:
             auto select_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - select_start).count();
 
             RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-                "Selected best Frenet trajectory (time: %.3fms)", select_time * 1000.0);
+                "Selection time: %.1fms", select_time * 1000.0);
 
             if(!best_frenet) {
                 RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
