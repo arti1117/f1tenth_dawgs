@@ -83,14 +83,31 @@ public:
         declare_parameter<int>("scan_downsample_factor", 3);  // Use every Nth scan point (3 = 1/3 of points)
         declare_parameter<double>("wall_sampling_distance", 0.15);  // Min distance between wall segment samples
         declare_parameter<bool>("enable_wall_detection", true);  // Toggle wall detection on/off
+        declare_parameter<bool>("enable_obstacle_detection", true);  // Toggle obstacle detection on/off
+
+        // Wall optimization parameters (reduce wall computation)
+        declare_parameter<int>("wall_point_downsample", 2);  // Use every Nth point in wall cluster (2 = 1/2 points)
+        declare_parameter<double>("max_wall_distance", 10.0);  // Ignore walls beyond this distance [m]
+        declare_parameter<int>("max_wall_segments", 100);  // Maximum wall segments to create per frame
+
+        // Advanced performance parameters for computation reduction
+        declare_parameter<bool>("enable_obstacle_clustering", true);  // If false, skip obstacle box creation
+        declare_parameter<int>("obstacle_points_per_side", 6);  // Points to sample per box side (default 6, reduce to 3-4 for speed)
+        declare_parameter<int>("max_obstacles_to_process", 50);  // Maximum number of obstacle boxes to process
+        declare_parameter<bool>("enable_path_filtering", true);  // Filter scan points near global path
+        declare_parameter<int>("frenet_lateral_samples", 9);  // Number of lateral samples (default 9, reduce to 5-7 for speed)
+        declare_parameter<int>("frenet_time_samples", 4);  // Number of time samples (default 4, reduce to 2-3 for speed)
 
         // Enhanced safety parameters
         declare_parameter<double>("frenet_vehicle_radius", 0.2);
         declare_parameter<double>("frenet_obstacle_radius", 0.15);
         declare_parameter<double>("frenet_k_velocity_safety", 0.15);
         declare_parameter<double>("frenet_min_safety_margin", 0.25);
-        declare_parameter<double>("frenet_k_proximity", 0.5);
-        declare_parameter<double>("frenet_proximity_threshold", 1.5);
+
+        // Two-zone cost model parameters (collision + warning zones)
+        declare_parameter<double>("frenet_warning_distance", 0.8);  // Warning zone outer distance [m]
+        declare_parameter<double>("frenet_warning_cost", 5.0);      // Cost weight in warning zone
+
         declare_parameter<int>("frenet_interpolation_checks", 3);
 
         // Path smoothing parameters
@@ -156,8 +173,29 @@ public:
         fp.dt = get_parameter("frenet_dt").as_double();
         fp.max_speed = get_parameter("frenet_max_speed").as_double();
         fp.max_accel = get_parameter("frenet_max_accel").as_double();
-        fp.d_samples = get_parameter("frenet_d_samples").as_double_array();
-        fp.t_samples = get_parameter("frenet_t_samples").as_double_array();
+
+        // Use performance-optimized sample counts if provided
+        int lateral_samples = get_parameter("frenet_lateral_samples").as_int();
+        int time_samples = get_parameter("frenet_time_samples").as_int();
+
+        // Generate uniform lateral samples from -1.0 to 1.0
+        fp.d_samples.clear();
+        for (int i = 0; i < lateral_samples; ++i) {
+            double d = -1.0 + 2.0 * i / std::max(1, lateral_samples - 1);
+            fp.d_samples.push_back(d);
+        }
+
+        // Generate uniform time samples
+        fp.t_samples.clear();
+        double t_min = 1.5;
+        double t_max = 3.0;
+        for (int i = 0; i < time_samples; ++i) {
+            double t = t_min + (t_max - t_min) * i / std::max(1, time_samples - 1);
+            fp.t_samples.push_back(t);
+        }
+
+        RCLCPP_INFO(get_logger(), "Frenet planner: %d lateral × %d time samples = %d candidates",
+            lateral_samples, time_samples, lateral_samples * time_samples);
         fp.k_j = get_parameter("frenet_k_jerk").as_double();
         fp.k_t = get_parameter("frenet_k_time").as_double();
         fp.k_d = get_parameter("frenet_k_deviation").as_double();
@@ -171,8 +209,11 @@ public:
         fp.obstacle_radius = get_parameter("frenet_obstacle_radius").as_double();
         fp.k_velocity_safety = get_parameter("frenet_k_velocity_safety").as_double();
         fp.min_safety_margin = get_parameter("frenet_min_safety_margin").as_double();
-        fp.k_proximity = get_parameter("frenet_k_proximity").as_double();
-        fp.proximity_threshold = get_parameter("frenet_proximity_threshold").as_double();
+
+        // Two-zone cost model parameters
+        fp.warning_distance = get_parameter("frenet_warning_distance").as_double();
+        fp.warning_cost = get_parameter("frenet_warning_cost").as_double();
+
         fp.interpolation_checks = get_parameter("frenet_interpolation_checks").as_int();
 
         frenet_ = std::make_unique<f1tenth::FrenetPlanner>(fp);
@@ -349,55 +390,39 @@ private:
         return boxes;
     }
 
-    // Visualize obstacle bounding boxes in RViz
+    // Visualize obstacle boxes in RViz (optimized for performance)
     void visualizeObstacles(const std::vector<ObstacleBox>& obstacles)
     {
+        // OPTIMIZATION: Throttle visualization to reduce CPU usage
+        // Only publish at 5Hz instead of every odometry callback (~50Hz)
+        auto current_time = now();
+        double time_since_last_viz = (current_time - last_obstacle_viz_time_).seconds();
+        if (time_since_last_viz < 0.2) {  // 5Hz = 0.2s interval
+            return;
+        }
+        last_obstacle_viz_time_ = current_time;
+
         visualization_msgs::msg::MarkerArray marker_array;
 
         // Clear previous markers
         visualization_msgs::msg::Marker clear_marker;
         clear_marker.header.frame_id = get_parameter("frame_id").as_string();
-        clear_marker.header.stamp = now();
+        clear_marker.header.stamp = current_time;
         clear_marker.ns = "obstacle_boxes";
         clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
         marker_array.markers.push_back(clear_marker);
 
-        // Create markers for each obstacle
+        // OPTIMIZATION: Only create outline markers (removed box markers)
+        // This reduces marker count by 50%
         for (size_t i = 0; i < obstacles.size(); ++i) {
             const auto& obs = obstacles[i];
-
-            // Bounding box marker (CUBE)
-            visualization_msgs::msg::Marker box_marker;
-            box_marker.header.frame_id = get_parameter("frame_id").as_string();
-            box_marker.header.stamp = now();
-            box_marker.ns = "obstacle_boxes";
-            box_marker.id = i * 2;  // Even IDs for boxes
-            box_marker.type = visualization_msgs::msg::Marker::CUBE;
-            box_marker.action = visualization_msgs::msg::Marker::ADD;
-
-            box_marker.pose.position.x = obs.center_x;
-            box_marker.pose.position.y = obs.center_y;
-            box_marker.pose.position.z = 0.5;  // Elevate for visibility
-            box_marker.pose.orientation.w = 1.0;
-
-            box_marker.scale.x = obs.size;
-            box_marker.scale.y = obs.size;
-            box_marker.scale.z = 1.0;  // 1m height
-
-            // Red semi-transparent box
-            box_marker.color.r = 1.0;
-            box_marker.color.g = 0.0;
-            box_marker.color.b = 0.0;
-            box_marker.color.a = 0.4;
-
-            marker_array.markers.push_back(box_marker);
 
             // Boundary outline (LINE_STRIP)
             visualization_msgs::msg::Marker outline_marker;
             outline_marker.header.frame_id = get_parameter("frame_id").as_string();
-            outline_marker.header.stamp = now();
+            outline_marker.header.stamp = current_time;
             outline_marker.ns = "obstacle_boxes";
-            outline_marker.id = i * 2 + 1;  // Odd IDs for outlines
+            outline_marker.id = i;
             outline_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
             outline_marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -431,7 +456,7 @@ private:
         pub_obstacle_markers_->publish(marker_array);
 
         RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-            "Visualized %zu obstacle bounding boxes", obstacles.size());
+            "Visualized %zu obstacle boxes (throttled to 5Hz)", obstacles.size());
     }
 
     // Break wall cluster into short line segments
@@ -445,16 +470,55 @@ private:
 
         double segment_length = get_parameter("wall_segment_length").as_double();
         double segment_width = get_parameter("wall_segment_width").as_double();
+        int wall_point_downsample = get_parameter("wall_point_downsample").as_int();
+        int max_wall_segments = get_parameter("max_wall_segments").as_int();
 
-        // Sort points along the wall (approximate line fitting)
-        std::vector<std::pair<double, double>> sorted_points = wall_cluster;
+        // =========================================================================
+        // WALL CLUSTERING OPTIMIZATION
+        // =========================================================================
+        // Reduces wall computation by:
+        // 1. Downsampling wall cluster points (skip every N points)
+        // 2. Limiting maximum wall segments created
+        // =========================================================================
+
+        // Optimization 1: Downsample wall cluster points
+        // Take every Nth point to reduce computation while maintaining wall shape
+        std::vector<std::pair<double, double>> sampled_points;
+        sampled_points.reserve(wall_cluster.size() / wall_point_downsample + 1);
+
+        for (size_t i = 0; i < wall_cluster.size(); i += wall_point_downsample) {
+            sampled_points.push_back(wall_cluster[i]);
+        }
+
+        // Always include the last point to complete the wall
+        if (wall_cluster.size() > 1 &&
+            (wall_cluster.size() - 1) % wall_point_downsample != 0) {
+            sampled_points.push_back(wall_cluster.back());
+        }
+
+        if (sampled_points.size() < 2) {
+            return segments;
+        }
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+            "Wall downsampling: %zu points → %zu sampled points (factor=%d)",
+            wall_cluster.size(), sampled_points.size(), wall_point_downsample);
 
         // Simple sequential connection based on proximity
-        for (size_t i = 0; i < sorted_points.size() - 1; ++i) {
-            double x1 = sorted_points[i].first;
-            double y1 = sorted_points[i].second;
-            double x2 = sorted_points[i + 1].first;
-            double y2 = sorted_points[i + 1].second;
+        int segments_created = 0;
+        for (size_t i = 0; i < sampled_points.size() - 1; ++i) {
+            // Optimization 2: Limit maximum wall segments
+            if (segments_created >= max_wall_segments) {
+                RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+                    "Reached max wall segments limit (%d), stopping wall processing",
+                    max_wall_segments);
+                break;
+            }
+
+            double x1 = sampled_points[i].first;
+            double y1 = sampled_points[i].second;
+            double x2 = sampled_points[i + 1].first;
+            double y2 = sampled_points[i + 1].second;
 
             double dist = std::hypot(x2 - x1, y2 - y1);
 
@@ -472,6 +536,7 @@ private:
                 seg.y2 = y2;
                 seg.width = segment_width;
                 segments.push_back(seg);
+                segments_created++;
             } else {
                 // Break long segment into multiple short segments
                 int num_subsegments = std::ceil(dist / segment_length);
@@ -479,6 +544,11 @@ private:
                 double dy = (y2 - y1) / num_subsegments;
 
                 for (int j = 0; j < num_subsegments; ++j) {
+                    // Check segment limit during subdivision
+                    if (segments_created >= max_wall_segments) {
+                        break;
+                    }
+
                     WallSegment seg;
                     seg.x1 = x1 + j * dx;
                     seg.y1 = y1 + j * dy;
@@ -486,13 +556,14 @@ private:
                     seg.y2 = y1 + (j + 1) * dy;
                     seg.width = segment_width;
                     segments.push_back(seg);
+                    segments_created++;
                 }
             }
         }
 
         RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
-            "Broke wall cluster with %zu points into %zu segments (segment_length=%.2fm)",
-            wall_cluster.size(), segments.size(), segment_length);
+            "Wall processing: %zu original → %zu sampled → %zu segments (max=%d)",
+            wall_cluster.size(), sampled_points.size(), segments.size(), max_wall_segments);
 
         return segments;
     }
@@ -547,64 +618,39 @@ private:
         return filtered_points;
     }
 
-    // Visualize wall segments in RViz
+    // Visualize wall segments in RViz (optimized for performance)
     void visualizeWallSegments(const std::vector<WallSegment>& wall_segments)
     {
+        // OPTIMIZATION: Throttle visualization to reduce CPU usage
+        // Only publish at 5Hz instead of every odometry callback (~50Hz)
+        auto current_time = now();
+        double time_since_last_viz = (current_time - last_wall_viz_time_).seconds();
+        if (time_since_last_viz < 0.2) {  // 5Hz = 0.2s interval
+            return;
+        }
+        last_wall_viz_time_ = current_time;
+
         visualization_msgs::msg::MarkerArray marker_array;
 
         // Clear previous markers
         visualization_msgs::msg::Marker clear_marker;
         clear_marker.header.frame_id = get_parameter("frame_id").as_string();
-        clear_marker.header.stamp = now();
+        clear_marker.header.stamp = current_time;
         clear_marker.ns = "wall_segments";
         clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
         marker_array.markers.push_back(clear_marker);
 
-        // Create markers for each wall segment
+        // OPTIMIZATION: Only create line markers (removed box markers)
+        // This reduces marker count by 50%
         for (size_t i = 0; i < wall_segments.size(); ++i) {
             const auto& seg = wall_segments[i];
 
-            // Calculate segment center and orientation
-            double cx = (seg.x1 + seg.x2) / 2.0;
-            double cy = (seg.y1 + seg.y2) / 2.0;
-            double length = std::hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
-            double yaw = std::atan2(seg.y2 - seg.y1, seg.x2 - seg.x1);
-
-            // Create box marker for segment
-            visualization_msgs::msg::Marker box_marker;
-            box_marker.header.frame_id = get_parameter("frame_id").as_string();
-            box_marker.header.stamp = now();
-            box_marker.ns = "wall_segments";
-            box_marker.id = i * 2;  // Even IDs for boxes
-            box_marker.type = visualization_msgs::msg::Marker::CUBE;
-            box_marker.action = visualization_msgs::msg::Marker::ADD;
-
-            box_marker.pose.position.x = cx;
-            box_marker.pose.position.y = cy;
-            box_marker.pose.position.z = 0.5;  // Elevate for visibility
-
-            // Set orientation based on segment direction
-            box_marker.pose.orientation.z = std::sin(yaw / 2.0);
-            box_marker.pose.orientation.w = std::cos(yaw / 2.0);
-
-            box_marker.scale.x = length;
-            box_marker.scale.y = seg.width;
-            box_marker.scale.z = 1.0;  // 1m height
-
-            // Blue semi-transparent box for wall segments
-            box_marker.color.r = 0.0;
-            box_marker.color.g = 0.5;
-            box_marker.color.b = 1.0;
-            box_marker.color.a = 0.4;
-
-            marker_array.markers.push_back(box_marker);
-
-            // Create line marker for segment center line
+            // Create line marker for segment
             visualization_msgs::msg::Marker line_marker;
             line_marker.header.frame_id = get_parameter("frame_id").as_string();
-            line_marker.header.stamp = now();
+            line_marker.header.stamp = current_time;
             line_marker.ns = "wall_segments";
-            line_marker.id = i * 2 + 1;  // Odd IDs for lines
+            line_marker.id = i;
             line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
             line_marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -630,7 +676,7 @@ private:
         pub_wall_markers_->publish(marker_array);
 
         RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-            "Visualized %zu wall segments", wall_segments.size());
+            "Visualized %zu wall segments (throttled to 5Hz)", wall_segments.size());
     }
 
     // Convert laser scan to obstacles in map frame
@@ -1069,62 +1115,105 @@ private:
         // Get obstacles from laser scan and model as bounding boxes
         auto obstacle_start = std::chrono::steady_clock::now();
 
+        // Check if obstacle detection is enabled
+        bool enable_obstacle = get_parameter("enable_obstacle_detection").as_bool();
+        bool enable_path_filter = get_parameter("enable_path_filtering").as_bool();
+        bool enable_clustering = get_parameter("enable_obstacle_clustering").as_bool();
+
         // Step 1: Get raw scan points in map frame
-        std::vector<std::pair<double,double>> raw_obstacles = getObstaclesFromScan();
+        std::vector<std::pair<double,double>> raw_obstacles;
+        if (enable_obstacle) {
+            raw_obstacles = getObstaclesFromScan();
+        }
 
         // Step 2: Filter out scan points near global path (avoid detecting path as obstacle)
-        std::vector<std::pair<double,double>> filtered_obstacles = filterScanPointsNearPath(raw_obstacles);
+        std::vector<std::pair<double,double>> filtered_obstacles;
+        if (enable_obstacle && enable_path_filter) {
+            filtered_obstacles = filterScanPointsNearPath(raw_obstacles);
+        } else if (enable_obstacle) {
+            filtered_obstacles = raw_obstacles;  // Skip filtering
+        }
 
         // Step 3: Cluster scan points into obstacle groups
         double cluster_distance = get_parameter("obstacle_cluster_distance").as_double();
-        auto clusters = clusterObstacles(filtered_obstacles, cluster_distance);
+        std::vector<std::vector<std::pair<double,double>>> clusters;
+        if (enable_obstacle && enable_clustering) {
+            clusters = clusterObstacles(filtered_obstacles, cluster_distance);
+        }
 
         // Step 4: Separate walls (large clusters) from obstacles (small clusters)
         double max_box_size = get_parameter("obstacle_max_box_size").as_double();
+        int max_obstacles = get_parameter("max_obstacles_to_process").as_int();
         std::vector<ObstacleBox> obstacle_boxes;
         std::vector<WallSegment> wall_segments;
+        bool enable_wall = get_parameter("enable_wall_detection").as_bool();
 
-        for (const auto& cluster : clusters) {
-            if (cluster.empty()) continue;
+        if (enable_obstacle && enable_clustering) {
+            for (const auto& cluster : clusters) {
+                if (cluster.empty()) continue;
 
-            // Find min/max extents
-            double min_x = std::numeric_limits<double>::max();
-            double max_x = std::numeric_limits<double>::lowest();
-            double min_y = std::numeric_limits<double>::max();
-            double max_y = std::numeric_limits<double>::lowest();
+                // Check if we've reached max obstacle limit
+                if (static_cast<int>(obstacle_boxes.size()) >= max_obstacles) {
+                    RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+                        "Reached max obstacle limit (%d), skipping remaining clusters", max_obstacles);
+                    break;
+                }
 
-            for (const auto& point : cluster) {
-                min_x = std::min(min_x, point.first);
-                max_x = std::max(max_x, point.first);
-                min_y = std::min(min_y, point.second);
-                max_y = std::max(max_y, point.second);
-            }
+                // Find min/max extents
+                double min_x = std::numeric_limits<double>::max();
+                double max_x = std::numeric_limits<double>::lowest();
+                double min_y = std::numeric_limits<double>::max();
+                double max_y = std::numeric_limits<double>::lowest();
 
-            double width = max_x - min_x;
-            double height = max_y - min_y;
-            double size = std::max(width, height);
+                for (const auto& point : cluster) {
+                    min_x = std::min(min_x, point.first);
+                    max_x = std::max(max_x, point.first);
+                    min_y = std::min(min_y, point.second);
+                    max_y = std::max(max_y, point.second);
+                }
 
-            // Classify: large = wall (break into segments), small = obstacle (box)
-            if (size > max_box_size) {
-                // Wall: break into short line segments
-                auto segments = breakWallIntoSegments(cluster);
-                wall_segments.insert(wall_segments.end(), segments.begin(), segments.end());
-            } else {
-                // Obstacle: create bounding box
-                double safety_margin = get_parameter("obstacle_box_safety_margin").as_double();
-                ObstacleBox box;
-                box.center_x = (min_x + max_x) / 2.0;
-                box.center_y = (min_y + max_y) / 2.0;
-                box.size = size + safety_margin;
-                box.points = cluster;
-                obstacle_boxes.push_back(box);
+                double width = max_x - min_x;
+                double height = max_y - min_y;
+                double size = std::max(width, height);
+
+                // Calculate cluster center for distance filtering
+                double cluster_center_x = (min_x + max_x) / 2.0;
+                double cluster_center_y = (min_y + max_y) / 2.0;
+
+                // Classify: large = wall (break into segments), small = obstacle (box)
+                if (enable_wall && size > max_box_size) {
+                    // OPTIMIZATION: Distance-based wall filtering
+                    // Ignore walls beyond max_wall_distance to reduce computation
+                    double max_wall_distance = get_parameter("max_wall_distance").as_double();
+                    double wall_dist_from_vehicle = std::hypot(cluster_center_x, cluster_center_y);
+
+                    if (wall_dist_from_vehicle <= max_wall_distance) {
+                        // Wall: break into short line segments
+                        auto segments = breakWallIntoSegments(cluster);
+                        wall_segments.insert(wall_segments.end(), segments.begin(), segments.end());
+                    } else {
+                        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 5000,
+                            "Skipping distant wall at %.1fm (max=%.1fm)",
+                            wall_dist_from_vehicle, max_wall_distance);
+                    }
+                } else {
+                    // Obstacle: create bounding box
+                    double safety_margin = get_parameter("obstacle_box_safety_margin").as_double();
+                    ObstacleBox box;
+                    box.center_x = (min_x + max_x) / 2.0;
+                    box.center_y = (min_y + max_y) / 2.0;
+                    box.size = size + safety_margin;
+                    box.points = cluster;
+                    obstacle_boxes.push_back(box);
+                }
             }
         }
 
-        // Step 5: Visualize obstacles and wall segments
-        visualizeObstacles(obstacle_boxes);
+        // Step 5: Visualize obstacles and wall segments (only if enabled)
+        if (enable_obstacle && enable_clustering) {
+            visualizeObstacles(obstacle_boxes);
+        }
 
-        bool enable_wall = get_parameter("enable_wall_detection").as_bool();
         if (enable_wall) {
             visualizeWallSegments(wall_segments);
         }
@@ -1133,17 +1222,21 @@ private:
         std::vector<std::pair<double,double>> obstacles;
 
         // 6a. Add bounding box perimeter samples (for clustered dynamic obstacles)
-        for (const auto& box : obstacle_boxes) {
-            double half_size = box.size / 2.0;
-            int points_per_side = 6;  // REDUCED 8→6: Fewer samples for faster processing
+        if (enable_obstacle && enable_clustering) {
+            int points_per_side = get_parameter("obstacle_points_per_side").as_int();
+            points_per_side = std::max(2, points_per_side);  // At least 2 points
 
-            // Sample all 4 sides of the square
-            for (int i = 0; i < points_per_side; ++i) {
-                double t = static_cast<double>(i) / (points_per_side - 1);
-                obstacles.push_back({box.center_x - half_size + t * box.size, box.center_y - half_size});
-                obstacles.push_back({box.center_x - half_size + t * box.size, box.center_y + half_size});
-                obstacles.push_back({box.center_x - half_size, box.center_y - half_size + t * box.size});
-                obstacles.push_back({box.center_x + half_size, box.center_y - half_size + t * box.size});
+            for (const auto& box : obstacle_boxes) {
+                double half_size = box.size / 2.0;
+
+                // Sample all 4 sides of the square
+                for (int i = 0; i < points_per_side; ++i) {
+                    double t = static_cast<double>(i) / (points_per_side - 1);
+                    obstacles.push_back({box.center_x - half_size + t * box.size, box.center_y - half_size});
+                    obstacles.push_back({box.center_x - half_size + t * box.size, box.center_y + half_size});
+                    obstacles.push_back({box.center_x - half_size, box.center_y - half_size + t * box.size});
+                    obstacles.push_back({box.center_x + half_size, box.center_y - half_size + t * box.size});
+                }
             }
         }
 
@@ -1786,6 +1879,10 @@ private:
     std::optional<f1tenth::FrenetTraj> previous_frenet_path_;
     bool enable_path_smoothing_;
     double path_smoothing_alpha_;
+
+    // Visualization throttling
+    rclcpp::Time last_wall_viz_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_obstacle_viz_time_{0, 0, RCL_ROS_TIME};
 
 
     std::unique_ptr<f1tenth::FrenetPlanner> frenet_;

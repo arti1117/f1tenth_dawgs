@@ -679,3 +679,256 @@ Add displays:
 
 --- comment
 lookup table을 잘못 해석하고 적용하고 있는듯하다. 
+
+--- expecting odom
+● 완료했습니다! path_tracker가 odom 토픽에서 예상한 위치를 계산하여 drive를 발행하도록 수정했습니다.
+
+  변경 사항
+
+  1. Parameter 추가 (path_tracker_node.cpp:50-52, path_tracker_node.hpp:107-109)
+
+  // Position compensation parameters
+  bool use_position_compensation_;    // Enable position compensation
+  double expected_computation_time_;  // Expected control loop computation time (default: 0.01s = 10ms)
+
+  2. Position Compensation 로직 추가 (path_tracker_node.cpp:339-371)
+
+  Before: 현재 odom 위치를 그대로 사용
+  double px = msg->pose.pose.position.x;
+  double py = msg->pose.pose.position.y;
+
+  After: 속도와 지연시간을 고려한 예상 위치 계산
+  // Calculate message delay
+  auto current_ros_time = this->now();
+  auto odom_stamp = rclcpp::Time(msg->header.stamp);
+  double message_delay = (current_ros_time - odom_stamp).seconds();
+
+  // Total lookahead time = message delay + computation time
+  double total_lookahead_time = message_delay + expected_computation_time_;
+
+  // Compensate position
+  px = px_raw + v * std::cos(yaw) * total_lookahead_time;
+  py = py_raw + v * std::sin(yaw) * total_lookahead_time;
+
+  동작 원리
+
+  1. 지연시간 계산:
+    - Message delay: odom timestamp와 현재 시간의 차이
+    - Computation time: 예상 제어 루프 계산 시간 (10ms)
+  2. 위치 예측:
+    - 현재 속도와 heading을 사용하여 total_lookahead_time 후의 위치 예측
+    - 예측 위치 = 현재 위치 + 속도 × 시간
+  3. Path Tracking:
+    - 예측된 위치를 기준으로 closest point와 lookahead point 계산
+    - 더 정확한 steering과 speed 명령 생성
+
+  빌드 완료
+
+  source install/setup.bash
+
+  효과
+
+  - 지연 보상: message delay와 computation time을 고려하여 미래 위치 예측
+  - 더 정확한 제어: 실제 차량이 도달할 위치를 기준으로 drive 명령 계산
+  - Path tracking 개선: 예상 위치 기반으로 lookahead point를 찾아 더 부드러운 주행
+  - 매 odom 콜백마다 실행: 지속적으로 예상 위치 기반 drive 발행
+
+  path_planner와 동일한 position compensation 전략을 사용하여 전체 제어 파이프라인이 일관되게
+  동작합니다!
+
+--- fast parameter 
+● 완료했습니다! path_planner에 wall detection과 obstacle detection을 제어하고 계산량을 극적으로 줄일
+  수 있는 파라미터들을 추가했습니다.
+
+  추가된 파라미터들 (path_planner_node.cpp:82-94)
+
+  1. Detection On/Off 파라미터
+
+  enable_wall_detection: true          # Wall detection 켜기/끄기 (기존)
+  enable_obstacle_detection: true      # Obstacle detection 켜기/끄기 (신규)
+
+  2. Advanced Performance 파라미터 (계산량 감소)
+
+  # Obstacle processing optimization
+  enable_obstacle_clustering: true     # Obstacle box 생성 활성화/비활성화
+  obstacle_points_per_side: 6         # Box 샘플 포인트 수 (6→3으로 줄이면 75% 감소)
+  max_obstacles_to_process: 50        # 처리할 최대 장애물 수
+
+  # Path filtering
+  enable_path_filtering: true         # Global path 근처 스캔 필터링
+
+  # Frenet planner sampling
+  frenet_lateral_samples: 9           # Lateral 샘플 수 (9→5로 줄이면 44% 감소)
+  frenet_time_samples: 4              # Time 샘플 수 (4→2로 줄이면 50% 감소)
+
+  3. 기존 Performance 파라미터
+
+  scan_downsample_factor: 3           # Scan 다운샘플링 (3→5로 늘리면 40% 감소)
+  wall_sampling_distance: 0.15        # Wall segment 샘플 간격
+
+  계산량 감소 효과
+
+  극단적 성능 모드 설정 예시
+
+  # 모든 detection 끄기 (최대 성능)
+  enable_obstacle_detection: false    # Obstacle 처리 완전 스킵
+  enable_wall_detection: false        # Wall 처리 완전 스킵
+  → **Obstacle processing 시간: ~95% 감소**
+
+  # Frenet 후보 수 감소
+  frenet_lateral_samples: 5           # 9→5: 44% 감소
+  frenet_time_samples: 2              # 4→2: 50% 감소
+  → **Frenet candidates: 36→10 (72% 감소)**
+
+  # Scan downsampling 증가
+  scan_downsample_factor: 5           # 3→5: 40% 감소
+  → **Scan points: 40% 감소**
+
+  # Obstacle sampling 최소화
+  obstacle_points_per_side: 3         # 6→3: 50% 감소
+  max_obstacles_to_process: 20        # 50→20: 60% 감소
+  → **Obstacle points: ~80% 감소**
+
+  전체 계산량 감소
+
+  모든 최적화 적용 시:
+  - Obstacle detection: ~95% 감소 (off 시)
+  - Frenet planning: ~72% 감소 (5×2 samples)
+  - Scan processing: ~40% 감소 (downsample 5)
+  - Overall: ~70-85% 계산량 감소 예상
+
+  빌드 완료
+
+  source install/setup.bash
+
+  사용 예시
+
+  config/planner.yaml에 추가:
+
+  # Performance optimization - 균형잡힌 설정
+  enable_obstacle_detection: true
+  enable_wall_detection: true
+  enable_obstacle_clustering: true
+  enable_path_filtering: true
+  obstacle_points_per_side: 4         # 6→4로 줄임
+  max_obstacles_to_process: 30        # 50→30으로 줄임
+  frenet_lateral_samples: 7           # 9→7로 줄임
+  frenet_time_samples: 3              # 4→3으로 줄임
+  scan_downsample_factor: 4           # 3→4로 늘림
+
+  # 극단적 성능 모드 (장애물 회피 없이 빠른 주행만)
+  enable_obstacle_detection: false
+  enable_wall_detection: false
+  frenet_lateral_samples: 5
+  frenet_time_samples: 2
+  scan_downsample_factor: 6
+
+  이제 path_planner의 계산량을 상황에 맞게 조절할 수 있어 planned_path 발행 빈도를 크게 높일 수
+  있습니다!
+
+---
+● path_planner 빌드도 성공적으로 완료되었습니다 (2분 20초).
+
+  모든 작업이 완료되었습니다. Todo 리스트를 업데이트하겠습니다.
+
+● 완료했습니다!
+
+  작업 내용 요약
+
+  1. tracker_params.yaml 파라미터 설명 (이전 작업에서 완료)
+
+  - 모든 파라미터에 대해 EFFECT, CAUTION, TYPICAL 값 포함한 상세 설명 추가
+  - Pure Pursuit, Adaptive Lookahead, Stanley Controller, Steering Filter 등 각 섹션별로 구성
+  - 수학 공식 및 물리적 의미 설명 포함
+
+  2. 조향 계산 과정 설명 (방금 완료)
+
+  path_tracker_node.cpp의 odomCallback 함수에 10단계 조향 계산 파이프라인 상세 문서화:
+
+  조향 계산 과정 (src/controller/path_tracker/src/path_tracker_node.cpp:373-516)
+
+  1. 가장 가까운 경로점 찾기 - 차량 위치에서 가장 가까운 waypoint 검색
+  2. 곡률 계산 - 3점 유한차분법으로 경로 곡률 추정 (kappa)
+  3. 횡방향 오차 계산 - 경로로부터의 수직 거리 (cross-track error)
+  4. 기본 lookahead 거리 계산 - 속도 기반 전방 주시 거리
+  5. 적응형 lookahead 조정 - 곡률과 오차 기반 동적 조정
+  6. Lookahead 점 찾기 - 경로 상에서 목표 지점 보간
+  7. Pure Pursuit 조향각 계산 - 기하학적 경로 추종 (δ = atan(2L sin(α)/d))
+  8. Stanley 보정 추가 - 횡방향 오차 피드백 (δ_stanley = atan(k·e_y/v) + heading_error)
+  9. 저역 통과 필터 적용 - 조향 평활화 (δ_filtered = (1-α)·δ_prev + α·δ_raw)
+  10. 물리적 제약 적용 - 최대 조향각으로 클램핑
+
+  3. 빌드 결과
+
+  - ✅ path_tracker: 1분 40초 (성공)
+  - ✅ path_planner: 2분 20초 (성공)
+
+  이제 tracker_params.yaml의 파라미터를 변경하면 어떤 영향이 있는지 YAML 파일에서 확인할 수 있고,
+  코드에서 조향이 어떤 과정을 거쳐 계산되는지 path_tracker_node.cpp:373-516 라인의 상세한 주석을 통해
+  이해할 수 있습니다.
+---
+● Summary
+
+  I've successfully added forward tracking and heading control features to the path_tracker package. Build
+  completed successfully in 1min 40s.
+
+  Changes Made:
+
+  1. Header File (path_tracker_node.hpp:79-87)
+
+  Added member variables:
+  - use_heading_control_, k_heading_ - Heading control parameters
+  - use_forward_tracking_, forward_search_range_, last_target_idx_ - Forward tracking parameters
+
+  2. Source File (path_tracker_node.cpp)
+
+  Parameter Declarations (lines 35-41):
+  - Added declarations for heading control and forward tracking parameters
+
+  Parameter Retrieval (lines 96-103):
+  - Added parameter retrieval and initialization
+
+  Forward Tracking Implementation (findClosestPoint(), lines 590-669):
+  - Searches only ahead of last target when enabled
+  - Forward window size based on forward_search_range_
+  - Falls back to full search if no point found in window
+  - Updates last_target_idx_ for next cycle
+  - Sequential progression ensures smooth tracking with low odom frequency
+
+  Heading Control Implementation (lines 508-526):
+  - Explicit heading error term: δ_heading = k_heading * (path_yaw - vehicle_yaw)
+  - Normalizes heading error to [-π, π]
+  - Optionally added to combined steering
+  - More aggressive heading alignment than Stanley's implicit term
+
+  3. Configuration File (tracker_params.yaml:84-142)
+
+  Added comprehensive parameter documentation:
+
+  # Heading Control (disabled by default)
+  use_heading_control: false
+  k_heading: 1.0
+
+  # Forward Tracking (disabled by default)
+  use_forward_tracking: false
+  forward_search_range: 2.0  # meters
+
+  Benefits:
+
+  Forward Tracking:
+  - Prevents "sticking" to same target point with low odom frequency
+  - Smoother path following when odometry updates slowly
+  - Recommended for odom frequency < 20Hz
+
+  Heading Control:
+  - Stronger heading alignment than Stanley alone
+  - Useful for tight heading tolerances
+  - Better low-speed heading correction
+
+  Usage:
+
+  To enable these features, edit tracker_params.yaml and set:
+  - use_forward_tracking: true for low-rate odometry scenarios
+  - use_heading_control: true for stronger heading correction
+
+  Both features are disabled by default to maintain backward compatibility with existing behavior.

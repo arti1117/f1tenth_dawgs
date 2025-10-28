@@ -16,11 +16,11 @@ global_planner_offline_node:
     # === TRAJECTORY OPTIMIZATION PARAMETERS ===
     # Safety width for IQP (iterative quadratic programming) trajectory
     # Smaller values allow tighter racing lines but less safety margin
-    safety_width: 1.1      # meters
+    safety_width: 1.3      # meters
 
     # Safety width for shortest path trajectory (used for overtaking)
     # Generally smaller than IQP safety width
-    safety_width_sp: 1.1     # meters
+    safety_width_sp: 1.3     # meters
 
 
     # === TRACK AND CENTERLINE SETTINGS ===
@@ -38,11 +38,11 @@ global_planner_offline_node:
 
 
     # === GLOBAL TRAJECTORY SETTINGS ===
-    max_speed: 15.0                    # Target max velocity [m/s]
-    min_speed: 0.5
+    max_speed: 12.0                   # Target max velocity [m/s]
+    min_speed: 0.6
     max_accel: 3.0                    # [m/s^2]
     max_decel: -3.0
-    curvature_gain: 1.0               # vx = max_speed / (1 + curvature_gain * |kappa|)
+    curvature_gain: 1.2               # vx = max_speed / (1 + curvature_gain * |kappa|)
     smooth_window: 7                  # Moving average window for smoothing
     traj_type: "iqp"                  # "iqp" (curvature-opt) or "sp" (shortest-path)
     save_json: True                   # Save global_waypoints.json

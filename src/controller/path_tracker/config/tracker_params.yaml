@@ -1,65 +1,286 @@
 path_tracker_node:
   ros__parameters:
-    # Pure pursuit parameters
-    lookahead_base: 0.3         # Base lookahead distance [m]
-    lookahead_k: 0.4            # Speed-dependent lookahead gain
+    # ============================================================================
+    # PURE PURSUIT PARAMETERS
+    # ============================================================================
+    # Pure pursuit finds a "lookahead point" ahead on the path and steers towards it
+
+    lookahead_base: 0.5         # Base lookahead distance [m]
+                                 # EFFECT: Larger = smoother but slower response, cuts corners more
+                                 #         Smaller = sharper turns but oscillation risk
+                                 # TYPICAL: 0.3-1.0m for F1TENTH scale
+
+    lookahead_k: 0.2            # Speed-dependent lookahead gain
+                                 # EFFECT: L = lookahead_base + lookahead_k * speed
+                                 #         Increases lookahead at higher speeds for stability
+                                 # TYPICAL: 0.2-0.5
+
     use_speed_lookahead: true   # Enable speed-dependent lookahead
+                                 # EFFECT: If false, uses constant lookahead_base
+                                 #         If true, adapts lookahead based on speed
 
-    # Adaptive lookahead parameters
-    use_adaptive_lookahead: true  # Enable curvature and error-based lookahead adjustment
-    lookahead_min: 0.4           # Minimum lookahead distance [m]
-    lookahead_max: 3.0           # Maximum lookahead distance [m]
-    k_curvature: 0.5             # Curvature-based lookahead gain (L += k_curv / |kappa|)
-    k_error: 0.5                 # Lateral error-based lookahead gain (L -= k_e * |e_y|)
+    # ============================================================================
+    # ADAPTIVE LOOKAHEAD PARAMETERS
+    # ============================================================================
+    # Adjusts lookahead based on path curvature and tracking error
+
+    use_adaptive_lookahead: false   # Enable curvature and error-based lookahead adjustment
+                                   # EFFECT: Dynamically adjusts lookahead for tight turns and corrections
+
+    lookahead_min: 0.3           # Minimum lookahead distance [m]
+                                  # EFFECT: Lower bound to prevent too aggressive steering
+                                  # CAUTION: Too small causes oscillation
+
+    lookahead_max: 1.2           # Maximum lookahead distance [m]
+                                  # EFFECT: Upper bound to prevent looking too far ahead
+                                  # CAUTION: Too large causes corner cutting
+
+    k_curvature: 0.0             # Curvature-based lookahead gain (L += k_curv / |kappa|)
+                                  # EFFECT: Increases lookahead in straight sections, reduces in curves
+                                  #         Higher value = more adaptation to curvature
+                                  # TYPICAL: 0.3-1.0
+
+    k_error: 0.7                 # Lateral error-based lookahead gain (L -= k_e * |e_y|)
+                                  # EFFECT: Reduces lookahead when far from path for quicker correction
+                                  #         Higher value = more aggressive error correction
+                                  # TYPICAL: 0.2-0.8
+
     curvature_epsilon: 0.001     # Small value to avoid division by zero in curvature
+                                  # TECHNICAL: Numerical stability parameter
 
-    # Stanley controller parameters (for cutting suppression)
+    # ============================================================================
+    # STANLEY CONTROLLER PARAMETERS
+    # ============================================================================
+    # Stanley adds heading error and cross-track error correction to Pure Pursuit
+    # Helps prevent "cutting corners" by adding a correction term
+
     use_stanley: true            # Enable Stanley term addition to Pure Pursuit
-    stanley_k: 0.3               # Stanley gain for lateral error correction
+                                  # EFFECT: Adds lateral error feedback to steering
+                                  #         Improves path following accuracy
+                                  # RESULT: Combined steering = Pure Pursuit + Stanley
 
-    # Steering filter parameters (for smooth control)
+    stanley_k: 0.9               # Stanley gain for lateral error correction
+                                  # EFFECT: Higher = stronger correction when off-path
+                                  #         δ_stanley = atan(k * lateral_error / velocity)
+                                  # CAUTION: Too high causes oscillation
+                                  # TYPICAL: 0.2-0.5
+
+    # ============================================================================
+    # STEERING FILTER PARAMETERS
+    # ============================================================================
+    # Low-pass filter to smooth steering commands and prevent jerky motion
+
     use_steering_filter: true    # Enable low-pass filter on steering commands
-    steering_alpha: 0.3          # Filter coefficient (0-1): higher = more responsive, lower = smoother
+                                  # EFFECT: Smooths rapid steering changes
+                                  # BENEFIT: Reduces mechanical wear, improves stability
 
-    # Vehicle parameters
+    steering_alpha: 0.8          # Filter coefficient (0-1): higher = more responsive, lower = smoother
+                                  # EFFECT: filtered = alpha * raw + (1-alpha) * previous
+                                  #         0.0 = no change (maximum smoothing)
+                                  #         1.0 = no filtering (instant response)
+                                  # CAUTION: Too low causes lag in response
+                                  # TYPICAL: 0.2-0.5
+
+    # ============================================================================
+    # HEADING CONTROL PARAMETERS (OPTIONAL)
+    # ============================================================================
+    # Explicit heading error term for more direct heading alignment
+    # This is separate from Stanley's implicit heading term and provides
+    # more aggressive heading correction when needed
+
+    use_heading_control: false   # Enable explicit heading control
+                                  # EFFECT: Adds δ_heading = k_heading * (path_yaw - vehicle_yaw)
+                                  # WHEN TO ENABLE:
+                                  #   - Need stronger heading correction than Stanley provides
+                                  #   - Low-speed scenarios where heading alignment is critical
+                                  #   - Path following with tight heading tolerances
+                                  # CAUTION: May cause oscillation if combined with high Stanley gain
+
+    k_heading: 1.0               # Heading error gain
+                                  # EFFECT: Controls strength of heading alignment
+                                  #         Higher = more aggressive heading correction
+                                  #         Lower = gentler heading alignment
+                                  # FORMULA: δ_heading = k_heading * heading_error
+                                  # TYPICAL: 0.8-1.5
+                                  # TUNING:
+                                  #   - If oscillates in heading → reduce to 0.8
+                                  #   - If heading response too slow → increase to 1.5
+
+    # ============================================================================
+    # FORWARD TRACKING PARAMETERS (FOR LOW ODOM FREQUENCY)
+    # ============================================================================
+    # Sequential path following that searches only ahead of last target point
+    # Prevents "sticking" to same target when odometry updates slowly
+
+    use_forward_tracking: false  # Enable sequential path following
+                                  # PROBLEM: Low odom frequency (< 20Hz) may cause controller
+                                  #          to target the same path point repeatedly
+                                  # SOLUTION: Search only forward indices from last target point
+                                  # EFFECT: Ensures sequential progression along planned_path
+                                  # BENEFIT:
+                                  #   - Smoother path following with low-rate odometry
+                                  #   - Prevents "sticking" to same target point
+                                  #   - Better tracking with delayed odom updates
+                                  # WHEN TO ENABLE:
+                                  #   - Odom frequency < 20Hz
+                                  #   - Using low-rate localization (e.g., GPS at 10Hz)
+                                  #   - Vehicle seems to "hesitate" or target same point
+                                  # WHEN TO DISABLE:
+                                  #   - High-frequency odom (> 50Hz)
+                                  #   - Standard particle filter at 50-100Hz
+                                  #   - May cause issues if vehicle deviates significantly
+
+    forward_search_range: 2.0    # Forward search range [m] from last target
+                                  # EFFECT: Defines how far ahead to look for next target
+                                  # FORMULA: search_window = forward_search_range / 0.1
+                                  #          (0.1m = path interpolation resolution)
+                                  # EXAMPLE: 2.0m range = 20 waypoints forward search
+                                  # TUNING:
+                                  #   - Too small (< 1.0m): May miss target if vehicle moves fast
+                                  #   - Too large (> 5.0m): Reduces forward tracking benefit
+                                  #   - Recommended: 2.0-3.0m for most cases
+                                  # NOTE: If no point found in range, falls back to full search
+
+    # ============================================================================
+    # VEHICLE PARAMETERS
+    # ============================================================================
+
     wheelbase: 0.33             # Vehicle wheelbase [m]
+                                 # EFFECT: Used in Pure Pursuit steering calculation
+                                 #         δ = atan(2 * L * sin(α) / lookahead_dist)
+                                 # IMPORTANT: Must match actual vehicle for accurate control
+
     default_speed: 2.0          # Default driving speed [m/s]
+                                 # EFFECT: Used when speed_mode = "default"
+                                 # SAFETY: Start low, increase gradually
+
     max_steering_angle: 0.4189  # Maximum steering angle [rad] (~24 degrees)
+                                 # EFFECT: Hard limit on steering commands
+                                 # SAFETY: Prevents exceeding servo/vehicle limits
+                                 # NOTE: 0.4189 rad = 24 degrees
 
-    # Path tracking parameters
-    path_timeout: 1.0           # Path timeout [s] - stop if no new path received
+    # ============================================================================
+    # PATH TRACKING PARAMETERS
+    # ============================================================================
 
-    # Debug mode parameters
-    debug_mode: true           # CHANGED: Disable debug mode for full performance
-    velocity_gain: 0.3          # CHANGED: Full velocity (was 0.2 = 20% speed limit)
-    debug_min_speed: 0.6        # Minimum speed in debug mode [m/s] (overrides min_speed_limit)
+    path_timeout: 2.5           # Path timeout [s] - stop if no new path received
+                                 # EFFECT: If path_planner stops publishing, maintains last command for 1s
+                                 # SAFETY: Prevents runaway if planning fails
 
-    # Simulation mode parameter
-    sim_mode: false             # Enable simulation mode (inverts steering for simulation compatibility)
-    sim_odom: "/ego_racecar/odom"
+    # ============================================================================
+    # DEBUG MODE PARAMETERS
+    # ============================================================================
 
-    # Speed control mode
-    # Options: "default", "path_velocity", "curvature", "optimize"
-    # - "default": Use default_speed parameter
-    # - "path_velocity": Use velocity from global_centerline path
-    # - "curvature": Calculate speed based on path curvature
-    # - "optimize": Use minimum of path_velocity, curvature, and friction limit
-    speed_mode: "optimize"
+    debug_mode: true           # Enable debug mode for testing
+                                # EFFECT: If true, applies velocity_gain to limit speed
+                                # USE: Set false for racing, true for tuning
 
-    # Curvature-based speed parameters (used when speed_mode = "curvature")
+    velocity_gain: 0.5          # Speed multiplier in debug mode (0.0-1.0)
+                                 # EFFECT: actual_speed = target_speed * velocity_gain
+                                 # EXAMPLE: 0.3 = 30% speed for safe tuning
+                                 # NOTE: Only applies when debug_mode = true
+
+    debug_min_speed: 0.6        # Minimum speed in debug mode [m/s]
+                                 # EFFECT: Overrides min_speed_limit when debug_mode = true
+                                 # SAFETY: Prevents too slow movement during testing
+
+    # ============================================================================
+    # SIMULATION MODE PARAMETERS
+    # ============================================================================
+
+    sim_mode: true             # Enable simulation mode
+                                # EFFECT: Uses sim_odom topic instead of odom_topic
+                                # NOTE: May invert steering for sim compatibility (check code)
+
+    sim_odom: "/ego_racecar/odom"  # Odometry topic for simulation
+
+    # ============================================================================
+    # SPEED CONTROL MODE
+    # ============================================================================
+    # Determines how target speed is calculated
+
+    speed_mode: "optimize"      # Speed control strategy
+                                 # OPTIONS:
+                                 # "default" = Use constant default_speed
+                                 #   - Simple, predictable
+                                 #   - Ignores path information
+                                 #
+                                 # "path_velocity" = Use velocity from global_centerline
+                                 #   - Follows pre-optimized speed profile
+                                 #   - Best for time-optimized paths
+                                 #
+                                 # "curvature" = Calculate from path curvature
+                                 #   - v = sqrt(friction_coeff * g * R)
+                                 #   - Adapts to track geometry
+                                 #
+                                 # "optimize" = min(path_velocity, curvature, friction_limit)
+                                 #   - Most conservative, safest
+                                 #   - Respects all limits
+
+    # ============================================================================
+    # CURVATURE-BASED SPEED PARAMETERS
+    # ============================================================================
+    # Used when speed_mode = "curvature" or "optimize"
+
     friction_coeff: 0.9         # Friction coefficient (mu) for lateral grip
+                                 # EFFECT: v_max = sqrt(mu * g * R)
+                                 #         Higher mu = higher cornering speed
+                                 # TYPICAL: 0.8-1.0 for good track surface
+                                 # CAUTION: Lower if slippery (0.5-0.7)
+
     max_speed_limit: 8.0        # Maximum speed limit [m/s]
+                                 # EFFECT: Hard cap on calculated speed
+                                 # SAFETY: Prevents unrealistic speeds in straight sections
+
     min_speed_limit: 0.5        # Minimum speed limit [m/s]
+                                 # EFFECT: Lower bound on calculated speed
+                                 # SAFETY: Prevents stopping in tight turns
 
-    # Acceleration limiting (friction circle based)
+    # ============================================================================
+    # ACCELERATION LIMITING (FRICTION CIRCLE)
+    # ============================================================================
+    # Limits longitudinal acceleration based on available lateral grip
+
     use_acceleration_limit: true    # Enable friction circle acceleration limiting
-    lateral_accel_lookup_table: "dawgs_lookup_table.csv"  # Lateral acceleration lookup table
-    package_share_dir: "/home/dawgs_nx/f1tenth_dawgs/src/controller/path_tracker/config"
-    max_total_acceleration: 12.0    # Maximum total acceleration (friction circle limit) [m/s^2] (1g default)
+                                     # EFFECT: a_long_max = sqrt(a_total² - a_lat²)
+                                     #         Reduces acceleration in turns
+                                     # BENEFIT: Prevents wheel slip, smoother control
 
-    # Topics
-    odom_topic: "/pf/pose/odom"   # default was /odom
-    drive_topic: "/drive"
-    path_topic: "/planned_path"        # CRITICAL FIX: Subscribe to BEST PATH (was /frenet_path) planned_path
-    global_path_topic: "/global_centerline"  # Global path with velocity info (for path_velocity mode)
-    base_frame: "base_link"
+    lateral_accel_lookup_table: "dawgs_lookup_table.csv"  # Lateral acceleration lookup table
+                                                            # TECHNICAL: Maps (steering, velocity) → lateral_accel
+
+    package_share_dir: "/home/dawgs_nx/f1tenth_dawgs/src/controller/path_tracker/config"
+                                                            # Directory containing lookup table
+
+    max_total_acceleration: 12.0    # Maximum total acceleration (friction circle limit) [m/s^2]
+                                     # EFFECT: sqrt(a_lat² + a_long²) ≤ max_total_acceleration
+                                     # TYPICAL: 9.81 m/s² (1g) for conservative, 15-20 for aggressive
+                                     # NOTE: 12.0 m/s² ≈ 1.2g
+
+    # ============================================================================
+    # POSITION COMPENSATION (LATENCY COMPENSATION)
+    # ============================================================================
+    # Predicts future position to compensate for message delay and computation time
+
+    use_position_compensation: true     # Enable position compensation
+                                         # EFFECT: Uses predicted position instead of current position
+                                         #         predicted_pos = current_pos + velocity * (msg_delay + comp_time)
+                                         # BENEFIT: Better path tracking at high speeds
+                                         # CAUTION: Assumes constant velocity motion
+
+    expected_computation_time: 0.01     # Expected control loop computation time [s]
+                                         # EFFECT: Added to message delay for total lookahead time
+                                         # TYPICAL: 0.01s (10ms) for 100Hz control loop
+                                         # NOTE: Measured from odom callback to drive publish
+
+    # ============================================================================
+    # TOPICS
+    # ============================================================================
+
+    odom_topic: "/pf/pose/odom"   # Odometry topic (localization input)
+    drive_topic: "/drive"         # Drive command output (Ackermann)
+    path_topic: "/planned_path"   # Path to follow (from path_planner)
+                                   # NOTE: This is the output of path_planner (best trajectory)
+    global_path_topic: "/global_centerline"  # Global reference path with velocity profile
+                                              # Used for speed_mode = "path_velocity"
+    base_frame: "base_link"       # Vehicle base frame

@@ -76,6 +76,15 @@ private:
   bool use_stanley_;
   double stanley_k_;         // Stanley gain for lateral error correction
 
+  // Heading control parameters (explicit heading error term)
+  bool use_heading_control_;     // Enable explicit heading control
+  double k_heading_;             // Heading error gain
+
+  // Forward tracking parameters (for low odom frequency)
+  bool use_forward_tracking_;    // Enable sequential path following
+  double forward_search_range_;  // Forward search range [m]
+  size_t last_target_idx_;       // Last target index on path
+
   // Steering filter parameters
   bool use_steering_filter_;
   double steering_alpha_;    // Low-pass filter coefficient (0-1)
@@ -103,6 +112,10 @@ private:
   double friction_coeff_;     // friction coefficient (mu)
   double max_speed_limit_;    // maximum speed limit
   double min_speed_limit_;    // minimum speed limit
+
+  // Position compensation parameters
+  bool use_position_compensation_;    // Enable position compensation based on velocity and latency
+  double expected_computation_time_;  // Expected control loop computation time [s]
 
   // Acceleration limiting parameters (friction circle based)
   bool use_acceleration_limit_;
