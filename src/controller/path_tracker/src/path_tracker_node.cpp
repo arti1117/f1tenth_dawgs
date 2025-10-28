@@ -32,6 +32,14 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     this->declare_parameter<bool>("use_steering_filter", true);
     this->declare_parameter<double>("steering_alpha", 0.3);
 
+    // Heading control parameters (explicit heading error term)
+    this->declare_parameter<bool>("use_heading_control", false);
+    this->declare_parameter<double>("k_heading", 1.0);
+
+    // Forward tracking parameters (for low odom frequency)
+    this->declare_parameter<bool>("use_forward_tracking", false);
+    this->declare_parameter<double>("forward_search_range", 2.0);
+
     // Debug mode parameters
     this->declare_parameter<bool>("debug_mode", false);
     this->declare_parameter<double>("velocity_gain", 1.0);
@@ -46,6 +54,10 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     this->declare_parameter<double>("friction_coeff", 0.9);
     this->declare_parameter<double>("max_speed_limit", 8.0);
     this->declare_parameter<double>("min_speed_limit", 0.5);
+
+    // Position compensation parameters
+    this->declare_parameter<bool>("use_position_compensation", true);
+    this->declare_parameter<double>("expected_computation_time", 0.01);  // 10ms expected computation time
 
     // Topics
     this->declare_parameter<std::string>("odom_topic", "/odom");
@@ -81,6 +93,15 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     prev_steering_ = 0.0;  // Initialize previous steering for filter
     prev_steering_for_accel_ = 0.0;  // Initialize previous steering for acceleration
 
+    // Heading control parameters
+    use_heading_control_ = this->get_parameter("use_heading_control").as_bool();
+    k_heading_ = this->get_parameter("k_heading").as_double();
+
+    // Forward tracking parameters
+    use_forward_tracking_ = this->get_parameter("use_forward_tracking").as_bool();
+    forward_search_range_ = this->get_parameter("forward_search_range").as_double();
+    last_target_idx_ = 0;  // Initialize last target index
+
     // Debug mode parameters
     debug_mode_ = this->get_parameter("debug_mode").as_bool();
     velocity_gain_ = this->get_parameter("velocity_gain").as_double();
@@ -104,6 +125,10 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     friction_coeff_ = this->get_parameter("friction_coeff").as_double();
     max_speed_limit_ = this->get_parameter("max_speed_limit").as_double();
     min_speed_limit_ = this->get_parameter("min_speed_limit").as_double();
+
+    // Position compensation parameters
+    use_position_compensation_ = this->get_parameter("use_position_compensation").as_bool();
+    expected_computation_time_ = this->get_parameter("expected_computation_time").as_double();
 
     // Acceleration limiting parameters (friction circle based)
     this->declare_parameter<bool>("use_acceleration_limit", false);
@@ -329,13 +354,63 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
     }
 
     // Get current pose
-    double px = msg->pose.pose.position.x;
-    double py = msg->pose.pose.position.y;
+    double px_raw = msg->pose.pose.position.x;
+    double py_raw = msg->pose.pose.position.y;
     double yaw = quatToYaw(msg->pose.pose.orientation);
     double vx = msg->twist.twist.linear.x;
-    double v = std::hypot(vx, msg->twist.twist.linear.y);
+    double vy = msg->twist.twist.linear.y;
+    double v = std::hypot(vx, vy);
 
-    // Find closest point on path
+    // Apply position compensation to account for latency
+    double px = px_raw;
+    double py = py_raw;
+
+    if (use_position_compensation_ && v > 0.1) {  // Only compensate if moving
+        // Calculate message delay (time since odometry was stamped)
+        auto current_ros_time = this->now();
+        auto odom_stamp = rclcpp::Time(msg->header.stamp);
+        double message_delay = (current_ros_time - odom_stamp).seconds();
+
+        // Estimate total delay (message delay + expected computation time)
+        double total_lookahead_time = message_delay + expected_computation_time_;
+
+        // Compensate position based on velocity and heading
+        px = px_raw + v * std::cos(yaw) * total_lookahead_time;
+        py = py_raw + v * std::sin(yaw) * total_lookahead_time;
+
+        // Log position compensation
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "Position compensation: delay=%.3fs (msg=%.3fs, comp=%.3fs), v=%.2fm/s, "
+            "pos=(%.2f,%.2f)→(%.2f,%.2f), Δ=%.3fm",
+            total_lookahead_time, message_delay, expected_computation_time_, v,
+            px_raw, py_raw, px, py,
+            std::hypot(px - px_raw, py - py_raw));
+    }
+
+    // =============================================================================
+    // STEERING CALCULATION PROCESS (10-step pipeline)
+    // =============================================================================
+    // This controller combines Pure Pursuit (geometric path following) with
+    // Stanley (lateral error correction) for accurate path tracking.
+    //
+    // Process Overview:
+    // 1. Find closest point on path → reference for error calculation
+    // 2. Calculate curvature → adapt lookahead for corners
+    // 3. Calculate lateral error → measure how far off-path we are
+    // 4. Compute base lookahead → speed-dependent forward looking distance
+    // 5. Apply adaptive lookahead → adjust for curvature and error
+    // 6. Find lookahead point → target point to steer towards
+    // 7. Pure Pursuit steering → geometric steering to reach target
+    // 8. Stanley correction → add lateral error feedback
+    // 9. Apply low-pass filter → smooth out rapid steering changes
+    // 10. Clamp to limits → enforce physical steering constraints
+    // =============================================================================
+
+    // STEP 1: Find closest point on path
+    // -----------------------------------------------------------------------------
+    // Locates the nearest waypoint on current_path_ to vehicle position (px, py).
+    // This serves as the reference point for calculating lateral error and curvature.
+    // Output: closest.idx (index), closest.distance (meters from path)
     auto closest = findClosestPoint(px, py);
 
     if (closest.distance > 5.0) {
@@ -344,23 +419,51 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
         return;
     }
 
-    // Calculate curvature at closest point for adaptive lookahead
+    // STEP 2: Calculate curvature at closest point
+    // -----------------------------------------------------------------------------
+    // Uses three-point finite difference method to estimate path curvature (kappa).
+    // Formula: kappa = 2 * |cross(v1, v2)| / |v1|^3
+    // where v1 = p2 - p1, v2 = p3 - p2
+    // Effect: High curvature (tight turn) → reduce lookahead for sharper response
+    //         Low curvature (straight) → increase lookahead for stability
     double curvature = computeCurvatureAtPoint(closest.idx);
 
-    // Calculate lateral error for adaptive lookahead and Stanley
+    // STEP 3: Calculate lateral error (cross-track error)
+    // -----------------------------------------------------------------------------
+    // Computes perpendicular distance from vehicle to path at closest point.
+    // Formula: e_y = -dx * sin(path_yaw) + dy * cos(path_yaw)
+    // Sign convention: positive = right of path, negative = left of path
+    // Used for: Adaptive lookahead adjustment + Stanley correction term
     double lateral_error = computeLateralError(px, py, closest);
 
-    // Compute base lookahead distance
+    // STEP 4: Compute base lookahead distance
+    // -----------------------------------------------------------------------------
+    // Base lookahead distance determines how far ahead to look for target point.
+    // Two modes:
+    //   - Constant: L = lookahead_base (fixed distance)
+    //   - Velocity-dependent: L = lookahead_base + lookahead_k * velocity
+    // Effect: Higher speed → longer lookahead → smoother but less aggressive
     double base_lookahead = lookahead_base_;
     if (use_speed_lookahead_) {
         base_lookahead = lookahead_base_ + lookahead_k_ * std::max(0.0, v);
     }
-    base_lookahead = std::max(0.5, base_lookahead);  // Minimum lookahead
+    base_lookahead = std::max(0.5, base_lookahead);  // Minimum lookahead safety
 
-    // Apply adaptive lookahead adjustment based on curvature and lateral error
+    // STEP 5: Apply adaptive lookahead adjustment
+    // -----------------------------------------------------------------------------
+    // Dynamically adjusts lookahead based on path geometry and tracking error:
+    //   - Curvature adjustment: L += k_curvature / (|kappa| + epsilon)
+    //     → Increase lookahead in straight sections, reduce in curves
+    //   - Error adjustment: L -= k_error * |lateral_error|
+    //     → Reduce lookahead when far from path for quicker correction
+    // Result: L_adaptive ∈ [lookahead_min, lookahead_max]
     double lookahead_dist = computeAdaptiveLookahead(base_lookahead, curvature, lateral_error, v);
 
-    // Find lookahead point
+    // STEP 6: Find lookahead point on path
+    // -----------------------------------------------------------------------------
+    // Walks along path from closest point, accumulating arc length until reaching
+    // lookahead_dist meters ahead. Interpolates between waypoints for precision.
+    // Output: lookahead.x, lookahead.y (target position), lookahead.v (target speed)
     auto lookahead = findLookaheadPoint(closest.idx, lookahead_dist);
 
     if (!lookahead.found) {
@@ -377,20 +480,77 @@ void PathTrackerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
     // Visualize lookahead point
     visualizeLookahead(lookahead.x, lookahead.y);
 
-    // Compute steering angle using pure pursuit
+    // STEP 7: Compute Pure Pursuit steering angle
+    // -----------------------------------------------------------------------------
+    // Geometric path following algorithm that steers toward lookahead point.
+    // Process:
+    //   1. Transform lookahead point to vehicle frame (rotate by -yaw)
+    //   2. Calculate angle to lookahead: alpha = atan2(y_veh, x_veh)
+    //   3. Pure Pursuit formula: δ = atan(2 * L * sin(alpha) / lookahead_dist)
+    // where L = wheelbase (distance between front and rear axles)
+    // Result: Steering angle to make vehicle arc toward lookahead point
     double pure_pursuit_steering = computeSteeringAngle(px, py, yaw, lookahead.x, lookahead.y);
 
-    // Add Stanley term for cutting suppression
+    // STEP 8: Add Stanley term for lateral error correction
+    // -----------------------------------------------------------------------------
+    // Stanley controller adds feedback based on cross-track error to prevent
+    // corner cutting and improve path following accuracy.
+    // Formula: δ_stanley = atan(k * e_y / v) + (path_yaw - vehicle_yaw)
+    // Components:
+    //   - Cross-track term: atan(k * lateral_error / velocity)
+    //     → Steers toward path proportional to distance from centerline
+    //   - Heading error: (path_yaw - vehicle_yaw)
+    //     → Aligns vehicle heading with path direction
+    // Effect: Corrects Pure Pursuit's tendency to cut corners in tight turns
     double path_yaw = current_path_[closest.idx].yaw;
     double stanley_correction = computeStanleyTerm(lateral_error, v, path_yaw, yaw);
 
-    // Combine Pure Pursuit and Stanley
-    double combined_steering = pure_pursuit_steering + stanley_correction;
+    // STEP 8b: Optional explicit heading control
+    // -----------------------------------------------------------------------------
+    // Explicit heading error term for more direct heading alignment
+    // Formula: δ_heading = k_heading * (path_yaw - vehicle_yaw)
+    // Effect: More aggressive heading alignment than Stanley's implicit heading term
+    // Enable when: Need stronger heading correction, especially at low speeds
+    double heading_correction = 0.0;
+    if (use_heading_control_) {
+        // Normalize heading error to [-π, π]
+        double heading_error = path_yaw - yaw;
+        while (heading_error > M_PI) heading_error -= 2.0 * M_PI;
+        while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
 
-    // Apply low-pass filter for smooth steering
+        heading_correction = k_heading_ * heading_error;
+
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+            "Heading control: error=%.3f rad, correction=%.3f rad",
+            heading_error, heading_correction);
+    }
+
+    // STEP 9: Combine Pure Pursuit, Stanley, and optional Heading control
+    // -----------------------------------------------------------------------------
+    // Enhanced hybrid controller = geometric path following + error feedback + heading control
+    // δ_combined = δ_pure_pursuit + δ_stanley + δ_heading
+    // Result: Benefits of all approaches:
+    //   - Pure Pursuit: Smooth geometric path following
+    //   - Stanley: Tight tracking and corner-cutting suppression
+    //   - Heading Control (optional): Stronger heading alignment
+    double combined_steering = pure_pursuit_steering + stanley_correction + heading_correction;
+
+    // STEP 10a: Apply low-pass filter for smooth steering
+    // -----------------------------------------------------------------------------
+    // First-order low-pass filter reduces high-frequency steering oscillations.
+    // Formula: δ_filtered = (1 - α) * δ_prev + α * δ_raw
+    // where α ∈ [0, 1] is the filter coefficient:
+    //   - α = 1.0: No filtering (instant response, jerky motion)
+    //   - α = 0.0: Maximum smoothing (slow response, stable)
+    //   - Typical: α = 0.2-0.5 for balance
+    // Effect: Smooths rapid steering changes → reduces mechanical wear and instability
     double filtered_steering = applySteeringFilter(combined_steering);
 
-    // Clamp steering angle
+    // STEP 10b: Clamp steering angle to physical limits
+    // -----------------------------------------------------------------------------
+    // Enforces hard constraint: δ ∈ [-max_steering_angle, max_steering_angle]
+    // Typical: max_steering_angle = 0.4189 rad (24 degrees) for F1TENTH
+    // Safety: Prevents exceeding servo limits and vehicle stability limits
     double steering = std::max(-max_steering_angle_, std::min(max_steering_angle_, filtered_steering));
 
     // Compute speed based on selected mode
@@ -455,16 +615,74 @@ ClosestPointResult PathTrackerNode::findClosestPoint(double px, double py) {
     result.x = 0.0;
     result.y = 0.0;
 
-    for (size_t i = 0; i < current_path_.size(); ++i) {
-        double dx = current_path_[i].x - px;
-        double dy = current_path_[i].y - py;
-        double dist = std::hypot(dx, dy);
+    if (current_path_.empty()) {
+        return result;
+    }
 
-        if (dist < result.distance) {
-            result.distance = dist;
-            result.idx = i;
-            result.x = current_path_[i].x;
-            result.y = current_path_[i].y;
+    // Forward tracking mode: search only ahead of last target
+    // Benefit: Ensures sequential progression along planned_path when odom frequency is low
+    if (use_forward_tracking_) {
+        // Calculate forward search window size (based on path interpolation resolution ~0.1m)
+        size_t forward_window = static_cast<size_t>(forward_search_range_ / 0.1);
+
+        // Define search range: [start_idx, end_idx)
+        size_t start_idx = last_target_idx_;
+        size_t end_idx = std::min(start_idx + forward_window, current_path_.size());
+
+        // Search in forward window
+        for (size_t i = start_idx; i < end_idx; ++i) {
+            double dx = current_path_[i].x - px;
+            double dy = current_path_[i].y - py;
+            double dist = std::hypot(dx, dy);
+
+            if (dist < result.distance) {
+                result.distance = dist;
+                result.idx = i;
+                result.x = current_path_[i].x;
+                result.y = current_path_[i].y;
+            }
+        }
+
+        // Fallback: If no point found in forward window, search full path
+        // This happens when vehicle deviates significantly or at path end
+        if (result.distance == std::numeric_limits<double>::infinity()) {
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                "Forward tracking: No point in window [%zu, %zu), falling back to full search",
+                start_idx, end_idx);
+
+            for (size_t i = 0; i < current_path_.size(); ++i) {
+                double dx = current_path_[i].x - px;
+                double dy = current_path_[i].y - py;
+                double dist = std::hypot(dx, dy);
+
+                if (dist < result.distance) {
+                    result.distance = dist;
+                    result.idx = i;
+                    result.x = current_path_[i].x;
+                    result.y = current_path_[i].y;
+                }
+            }
+        }
+
+        // Update last target index for next cycle
+        last_target_idx_ = result.idx;
+
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+            "Forward tracking: target_idx=%zu, search_range=[%zu, %zu), distance=%.3f",
+            result.idx, start_idx, end_idx, result.distance);
+    } else {
+        // Standard mode: full path search
+        for (size_t i = 0; i < current_path_.size(); ++i) {
+            double dx = current_path_[i].x - px;
+            double dy = current_path_[i].y - py;
+            double dist = std::hypot(dx, dy);
+
+            if (dist < result.distance) {
+                result.distance = dist;
+                result.idx = i;
+                result.x = current_path_[i].x;
+                result.y = current_path_[i].y;
+            }
         }
     }
 
@@ -538,11 +756,6 @@ double PathTrackerNode::computeSteeringAngle(double px, double py, double yaw,
 
     double alpha = std::atan2(y_veh, x_veh);
     double steering = std::atan2(2.0 * wheelbase_ * std::sin(alpha), L);
-
-    // Invert steering for simulation if sim_mode is enabled
-    if (sim_mode_) {
-        steering = -steering;
-    }
 
     return steering;
 }

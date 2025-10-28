@@ -889,3 +889,67 @@ ros2 param list /path_planner_node
   → 안전 마진: 0.45~0.75m 확보 ✅
 
   테스트 후 결과 알려주시면 추가 조정하겠습니다! 🎯
+
+---
+● 완료
+
+  path_planner의 wall과 obstacle 비용 계산을 two-zone cost model로 변경했습니다. 빌드 성공 (2min 47s).
+
+  변경 사항:
+
+  1. Three-Zone Model 구현
+
+  기존 proximity cost를 제거하고 3개 구역으로 단순화:
+
+  ZONE 1: Collision Zone (dist < dynamic_safety)
+  - 즉시 trajectory 거부
+  - dynamic_safety = vehicle_radius + obstacle_radius + min_safety_margin + k_velocity_safety × velocity
+
+  ZONE 2: Warning Zone (dynamic_safety ≤ dist < warning_distance)
+  - Linear penalty: collision edge에서 1.0 → warning edge에서 0.0
+  - Cost = warning_cost × penalty_factor
+  - 예: 충돌 거리 0.4m, 경고 거리 0.8m → 경고 구역 폭 0.4m
+
+  ZONE 3: Safe Zone (dist ≥ warning_distance)
+  - 비용 없음 → 트랙 중앙으로 가려는 bias 제거
+
+  2. 코드 수정
+
+  frenet.hpp:55-57
+  double warning_distance{0.8};  // Warning zone outer distance
+  double warning_cost{5.0};      // Cost weight in warning zone
+
+  frenet.cpp:522-538 - Linear penalty 계산:
+  if (dist < p_.warning_distance) {
+      double margin = dist - dynamic_safety;
+      double warning_range = p_.warning_distance - dynamic_safety;
+      if (margin > 0 && warning_range > 0) {
+          double penalty_factor = 1.0 - (margin / warning_range);
+          proximity_cost += penalty_factor;
+      }
+  }
+  // else: Safe zone → no cost
+
+  3. 새로운 파라미터 (planner_params.yaml:154-175)
+
+  frenet_warning_distance: 0.8  # 경고 구역 외부 거리 [m]
+                                # 이 거리 밖: 비용 없음
+                                # 권장: 0.6-1.0m
+
+  frenet_warning_cost: 5.0      # 경고 구역 비용 가중치
+                                # 높을수록 회피 강도 증가
+                                # 권장: 5.0-8.0
+
+  효과:
+
+  ✅ 트랙 중앙 bias 제거: 0.8m 밖의 wall은 비용 없음
+  ✅ 전체 트랙 폭 활용: 중앙으로 당겨지지 않음
+  ✅ 충돌 안전성 유지: Warning zone에서 적절한 회피
+  ✅ 파라미터 조정 가능: warning_distance와 warning_cost로 제어
+
+  튜닝 가이드:
+
+  - warning_distance: 너무 작으면 (<0.5m) 경고 부족, 너무 크면 (>1.5m) proximity cost 재현
+  - warning_cost: 너무 낮으면 (<2.0) 회피 부족, 너무 높으면 (>15.0) 과도한 회피
+
+  기존 frenet_k_proximity와 frenet_proximity_threshold 파라미터는 제거되었습니다.

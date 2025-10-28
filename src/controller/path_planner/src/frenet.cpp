@@ -519,14 +519,23 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                             break;
                         }
 
-                        // Proximity cost (soft penalty for being close to obstacles)
-                        if (dist < p_.proximity_threshold) {
-                            double margin = dist - dynamic_safety;
-                            if (margin > 0) {
-                                // Add inverse distance cost (higher cost when closer)
-                                proximity_cost += 1.0 / (margin + 0.1);
+                        // Warning zone cost (linear penalty between collision and warning distance)
+                        // Two-zone model: collision zone (immediate rejection) + warning zone (cost penalty)
+                        // Beyond warning_distance: NO COST (prevents "track center bias")
+                        if (dist < p_.warning_distance) {
+                            double margin = dist - dynamic_safety;  // Distance from collision edge
+                            double warning_range = p_.warning_distance - dynamic_safety;  // Warning zone width
+
+                            if (margin > 0 && warning_range > 0) {
+                                // Linear penalty: 1.0 at collision edge → 0.0 at warning edge
+                                double penalty_factor = 1.0 - (margin / warning_range);
+                                proximity_cost += penalty_factor;
+
+                                FRENET_LOG(LogLevel::VERBOSE, "[Frenet] WARNING ZONE at point " << i
+                                          << ": dist=" << dist << ", penalty=" << penalty_factor);
                             }
                         }
+                        // else: Safe zone (dist >= warning_distance) → no cost added
                     }
 
                     // Road boundary check
@@ -584,12 +593,12 @@ std::vector<FrenetTraj> FrenetPlanner::generate(
                     [](double a, double b){ return a + std::abs(b); }) / tr.d.size();
                 double v_err = 0.0;  // optional
 
-                // Total cost with proximity penalty
+                // Total cost with warning zone penalty
                 tr.cost = p_.k_j * j_lat + p_.k_t * T + p_.k_d * dev + p_.k_v * v_err +
-                          p_.k_proximity * proximity_cost;
+                          p_.warning_cost * proximity_cost;
 
                 FRENET_LOG(LogLevel::DEBUG, "[Frenet] ✅ Candidate (T=" << T << ", df=" << df
-                          << "): cost=" << tr.cost << " (prox=" << proximity_cost << ")");
+                          << "): cost=" << tr.cost << " (warn=" << proximity_cost << ")");
 
                 cands.push_back(std::move(tr));
             } else if (tr.collision) {

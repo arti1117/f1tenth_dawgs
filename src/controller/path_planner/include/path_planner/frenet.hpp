@@ -51,8 +51,11 @@ namespace f1tenth
         double obstacle_radius{0.15};         // Expected obstacle radius [m]
         double k_velocity_safety{0.15};       // Velocity-dependent safety gain (s = base + k*v)
         double min_safety_margin{0.25};       // Minimum safety margin [m]
-        double k_proximity{0.5};              // Proximity cost weight
-        double proximity_threshold{1.5};      // Distance threshold for proximity cost [m]
+
+        // Two-zone cost model: collision zone + warning zone (no cost beyond warning distance)
+        double warning_distance{0.8};         // Warning zone outer distance [m] (no cost beyond this)
+        double warning_cost{5.0};             // Cost weight in warning zone
+
         int interpolation_checks{3};          // Number of intermediate collision checks between samples
     };
 
