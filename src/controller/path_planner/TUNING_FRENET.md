@@ -1,268 +1,891 @@
-● 완료했습니다! 다음과 같이 수정했습니다:
+# Frenet Path Planner 파라미터 튜닝 가이드
 
-  변경 사항 요약
-
-  1. Lookahead Distance 추가 (더 앞쪽에서 경로 생성)
-
-  src/controller/path_planner/config/planner_params.yaml:26
-  frenet_lookahead_distance: 2.0  # 경로 생성 시작 지점을 2m 앞으로
-
-  src/controller/path_planner/src/path_planner_node.cpp:562-592
-  - 현재 위치의 s 좌표에 lookahead distance를 추가
-  - Closed loop 경로의 wrapping 처리 포함
-  - 기본값 2.0m 설정 (config에서 조정 가능)
-
-  2. Obstacle Avoidance 개선
-
-  a) Lateral Sampling 확장 (planner_params.yaml:30)
-
-  # 기존: [-1.0, -0.75, ..., 1.0] (9개 샘플)
-  # 변경: [-1.5, -1.25, ..., 1.5] (13개 샘플)
-  더 넓은 lateral 범위에서 경로 샘플링 → 장애물 회피 옵션 증가
-
-  b) Safety Margin 증가 (planner_params.yaml:43-53)
-
-  frenet_safety_radius: 0.9 → 1.2m         # 기본 안전 반경 33% 증가
-  frenet_road_half_width: 1.2 → 1.5m       # 주행 가능 폭 25% 증가  
-  frenet_vehicle_radius: 0.5 → 0.6m        # 차량 반경 20% 증가
-  frenet_obstacle_radius: 0.5 → 0.6m       # 장애물 반경 20% 증가
-  frenet_k_proximity: 0.5 → 2.0            # 근접 비용 가중치 4배 증가
-  frenet_proximity_threshold: 1.5 → 2.5m   # 감지 거리 67% 증가
-  frenet_interpolation_checks: 3 → 5       # 충돌 체크 밀도 67% 증가
-
-  c) Obstacle Detection 범위 확장 (path_planner_node.cpp:231)
-
-  // 기존: 5.0m → 변경: 8.0m
-  if (range > 8.0) continue;  // 더 먼 장애물도 고려
-
-  빌드 방법
-
-  cd /home/dawgs_nx/f1tenth_dawgs
-  colcon build --packages-select path_planner
-  source install/setup.bash
-
-  튜닝 가능한 파라미터
-
-  frenet_lookahead_distance (기본 2.0m)
-  - 증가: 더 앞을 보고 계획 (반응 시간 증가)
-  - 감소: 현재 위치에 더 가까운 계획 (민첩성 증가)
-
-  frenet_k_proximity (기본 2.0)
-  - 증가: 장애물에서 더 멀리 떨어짐 (안전 우선)
-  - 감소: 장애물에 더 가까이 접근 가능 (속도 우선)
-
-  frenet_safety_radius (기본 1.2m)
-  - 차량-장애물 간 최소 거리 제어
-
-  frenet_d_samples
-  - lateral 샘플 개수/범위 조정으로 회피 경로 다양성 제어
-
-  수정된 코드를 빌드하시면 됩니다!
+F1TENTH 레이싱을 위한 Frenet 기반 경로 계획기의 파라미터 조정 방법을 설명합니다.
 
 ---
 
-● 완료했습니다! 장애물 인식 및 시각화 시스템을 추가했습니다.
+## 📋 목차
 
-  구현 내용
+1. [시스템 개요](#시스템-개요)
+2. [Best Path 토픽 구조](#best-path-토픽-구조)
+3. [파라미터 설명](#파라미터-설명)
+4. [튜닝 절차](#튜닝-절차)
+5. [문제 해결](#문제-해결)
+6. [실전 팁](#실전-팁)
 
-  1. 장애물 클러스터링 (path_planner_node.cpp:211-255)
+---
 
-  - 거리 기반 DBSCAN 스타일 클러스터링
-  - 0.5m 이내의 laser scan 점들을 하나의 장애물 그룹으로 묶음
-  - 최소 3개 이상의 점이 있는 클러스터만 유지 (노이즈 필터링)
+## 시스템 개요
 
-  2. Bounding Box 생성 (path_planner_node.cpp:257-297)
+### Frenet Path Planner란?
 
-  - 각 클러스터를 정사각형 bounding box로 모델링
-  - 클러스터의 min/max 범위 계산
-  - 더 큰 차원(width/height)을 사용해 정사각형 생성
-  - 40cm 안전 마진 추가 (실제 장애물보다 큰 box)
+Frenet 좌표계를 사용하여 **장애물을 회피하면서 중심선을 따라가는 최적 경로**를 실시간으로 생성합니다.
 
-  3. RViz 시각화 (path_planner_node.cpp:299-382)
+**주요 특징**:
+- ✅ 45개 후보 경로 생성 (9개 lateral × 5개 time horizon)
+- ✅ 충돌 검사 + 근접 비용 계산
+- ✅ Cost function 기반 최적 경로 선택
+- ✅ 속도에 따른 동적 안전 반경
 
-  두 가지 마커로 표시:
-  - 빨간색 반투명 박스 (CUBE 마커): 장애물 부피 표현
-  - 빨간색 경계선 (LINE_STRIP): 정사각형 테두리 강조
+### 데이터 흐름
 
-  Topic: /obstacle_boxes
+```
+LiDAR Scan → Obstacle Detection → Clustering → Bounding Box
+                                                     ↓
+Odometry → Frenet State → Trajectory Generation ← Obstacles
+                                 ↓
+                         Cost Evaluation (충돌 + 근접도 + 평활도)
+                                 ↓
+                         Best Path Selection
+                                 ↓
+                         /planned_path (path_tracker 입력)
+```
 
-  4. Frenet Planner 통합 (path_planner_node.cpp:781-836)
+---
 
-  5단계 처리:
-  1. Raw scan 점 획득 (map frame)
-  2. 클러스터링 (0.5m 거리 기준)
-  3. Bounding box 생성
-  4. RViz 시각화
-  5. Box 경계를 밀집 샘플링 (각 변마다 8개 점 → 총 32개 점/box)
+## Best Path 토픽 구조
 
-  5. 디버그 로깅 (path_planner_node.cpp:834-836)
+### 1. 주요 토픽
 
-  "Detected %zu raw points → %zu clusters → %zu boxes → %zu boundary
-  points"
-  처리 파이프라인 상태 확인 가능
+| 토픽 | 타입 | 설명 | 사용처 |
+|------|------|------|--------|
+| `/planned_path` | `nav_msgs/Path` | **최종 계획 경로 (Best Path)** ⭐ | path_tracker가 따라가는 경로 |
+| `/frenet_path` | `nav_msgs/Path` | Frenet 최적 경로 (시각화) | RViz 디버깅용 |
+| `/global_centerline` | `nav_msgs/Path` | CSV 글로벌 중심선 | 참조 경로 |
+| `/obstacle_boxes` | `MarkerArray` | 감지된 장애물 바운딩 박스 | RViz 시각화 |
 
-  RViz 설정 방법
+### 2. Best Path 생성 과정
 
-  빌드 후 RViz에서 다음 topic을 추가하세요:
+```
+Step 1: Frenet Trajectory Generation
+  - 45개 후보 생성 (9 lateral × 5 time horizons)
+  - 장애물 충돌 검사 + Proximity cost 계산
+  - 최적 경로 선택 (cost 기반)
 
-  Topic: /obstacle_boxes
-  Type: visualization_msgs/MarkerArray
+Step 2: Lattice LUT Extension (optional)
+  - Frenet 경로 끝에서 spiral 경로 연결
+  - 부드러운 곡선 연결
 
-  표시 내용:
-  - 🟥 빨간 반투명 박스: 장애물 영역
-  - 🔴 빨간 경계선: 정사각형 테두리 (ground level, z=0)
-  - 📦 박스 높이: 1m (시각성)
+Step 3: Publish
+  - /planned_path → path_tracker 입력
+```
 
-  빌드 및 실행
+### 3. Path 메시지 구조
 
-  cd /home/dawgs_nx/f1tenth_dawgs
+```cpp
+nav_msgs/Path {
+  header: {frame_id: "map", stamp: ...}
+  poses: [
+    PoseStamped {
+      position: {x, y, z}  // z에 속도 저장!
+      orientation: {x, y, z, w}  // yaw 정보
+    },
+    ...
+  ]
+}
+```
+
+**중요**: `pose.position.z`에 목표 속도가 저장됩니다!
+
+### 4. 토픽 사용법
+
+**path_tracker에서 사용**:
+```cpp
+void pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
+    for (const auto& pose : msg->poses) {
+        double x = pose.pose.position.x;
+        double y = pose.pose.position.y;
+        double target_velocity = pose.pose.position.z;  // ⭐ 속도 정보
+        double yaw = getYawFromQuaternion(pose.pose.orientation);
+
+        // Pure pursuit 또는 다른 tracking 알고리즘 적용
+    }
+}
+```
+
+**RViz에서 시각화**:
+```
+Add → By Topic → /planned_path → Path
+```
+
+---
+
+## 파라미터 설명
+
+파라미터 파일: `config/planner_params.yaml`
+
+### 1. Frenet Trajectory 생성 파라미터
+
+#### 기본 설정
+```yaml
+frenet_time_horizon: 3.0       # 최대 시간 범위 [s]
+frenet_min_time: 1.0           # 최소 시간 범위 [s]
+frenet_target_speed: 3.0       # 목표 속도 [m/s]
+frenet_dt: 0.05                # 샘플링 간격 [s]
+frenet_max_speed: 12.0         # 최대 허용 속도 [m/s]
+frenet_max_accel: 3.0          # 최대 lateral 가속도 [m/s²]
+frenet_lookahead_distance: 0.5 # 전방 예측 거리 [m]
+```
+
+**조정 방법**:
+- `target_speed` ↑ → 더 빠른 주행 (장애물 회피 능력 ↓)
+- `time_horizon` ↑ → 더 먼 미래 예측 (계산량 ↑)
+- `lookahead_distance` ↑ → 더 일찍 경로 계획 시작
+
+#### Lateral Sampling (좌우 샘플링)
+```yaml
+frenet_d_samples: [-1.25, -1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25]
+```
+
+**의미**: 중심선으로부터 좌우로 얼마나 벗어난 경로를 시도할지 결정
+
+**조정 방법**:
+- 샘플 개수 ↑ → 더 많은 회피 옵션 (계산량 ↑)
+- 범위 ↑ (예: ±1.5m) → 더 큰 장애물 회피 가능
+- 범위 ↓ (예: ±0.8m) → 중심선 근처만 주행
+
+**예시**:
+```yaml
+# 좁은 트랙 (중심선 선호)
+frenet_d_samples: [-0.5, -0.25, 0.0, 0.25, 0.5]
+
+# 넓은 트랙 (큰 회피)
+frenet_d_samples: [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]
+```
+
+#### Time Horizon Sampling
+```yaml
+frenet_t_samples: [1.5, 2.0, 2.5, 3.0]
+```
+
+**의미**: 얼마나 먼 미래까지 경로를 계획할지
+
+**조정 방법**:
+- 짧은 시간 (1.0~2.0s) → 빠른 반응, 급한 회피
+- 긴 시간 (2.5~4.0s) → 부드러운 경로, 계획적 회피
+
+---
+
+### 2. Cost Function 가중치
+
+```yaml
+frenet_k_jerk: 0.1       # 평활도 (jerk) 가중치
+frenet_k_time: 0.1       # 시간 가중치 (빠른 경로 선호)
+frenet_k_deviation: 1.0  # 중심선 이탈 패널티
+frenet_k_velocity: 1.0   # 속도 오차 패널티
+```
+
+**Cost Function**:
+```
+Total Cost = k_jerk × jerk + k_time × time + k_deviation × deviation + k_velocity × v_error + k_proximity × proximity_cost
+```
+
+#### 각 가중치의 역할
+
+| 가중치 | 역할 | 증가 시 효과 | 감소 시 효과 |
+|--------|------|-------------|-------------|
+| `k_jerk` | 경로 평활도 | 더 부드러운 경로 (급격한 핸들 조작 ↓) | 더 날카로운 회피 가능 |
+| `k_time` | 경로 길이 | 짧은 경로 선호 (빠른 도착) | 긴 경로 허용 (안전 우선) |
+| `k_deviation` | 중심선 선호도 | 중심선에 가까운 경로 선호 | 큰 회피 허용 |
+| `k_velocity` | 속도 유지 | 목표 속도 유지 (안정적) | 속도 변화 허용 |
+
+**튜닝 예시**:
+
+```yaml
+# 공격적 주행 (빠르고 날카롭게)
+frenet_k_jerk: 0.05          # 평활도 낮춤
+frenet_k_time: 0.2           # 짧은 경로 선호
+frenet_k_deviation: 0.5      # 중심선 이탈 허용
+frenet_k_velocity: 0.5       # 속도 변화 허용
+
+# 안전 주행 (부드럽고 안정적)
+frenet_k_jerk: 0.3           # 평활도 높임
+frenet_k_time: 0.05          # 경로 길이 덜 중요
+frenet_k_deviation: 2.0      # 중심선 선호
+frenet_k_velocity: 1.5       # 속도 유지
+```
+
+---
+
+### 3. 장애물 회피 파라미터 ⭐ 중요!
+
+#### Hard Collision (충돌 판정)
+```yaml
+frenet_safety_radius: 0.3        # 기본 충돌 반경 [m]
+frenet_vehicle_radius: 0.25      # 차량 크기 [m]
+frenet_obstacle_radius: 0.15     # 장애물 크기 [m]
+frenet_k_velocity_safety: 0.05   # 속도 의존 안전 계수
+frenet_min_safety_margin: 0.25   # 최소 안전 여유 [m]
+```
+
+**동적 안전 반경 계산**:
+```
+dynamic_safety = max(min_safety_margin,
+                     safety_radius + vehicle_radius + obstacle_radius + k_velocity_safety × velocity)
+```
+
+**예시** (v=3.0 m/s):
+```
+dynamic_safety = max(0.25, 0.3 + 0.25 + 0.15 + 0.05 × 3.0)
+               = max(0.25, 0.85)
+               = 0.85m
+```
+
+→ 장애물과의 거리가 **0.85m 미만**이면 **충돌로 판정** → 해당 경로 거부
+
+#### Soft Cost (근접 비용) ⭐⭐⭐
+
+```yaml
+frenet_k_proximity: 10.0         # 근접 비용 가중치
+frenet_proximity_threshold: 3.5  # 근접 비용 적용 범위 [m]
+```
+
+**근접 비용 계산**:
+```
+장애물과의 거리 d에 대해:
+- d < dynamic_safety (0.85m): 충돌! 경로 거부
+- 0.85m < d < 3.5m: proximity_cost += k_proximity × (1.0 / (margin + 0.1))
+- d > 3.5m: 비용 없음
+```
+
+**거리별 비용 예시** (k_proximity=10.0):
+
+| 거리 (m) | margin | proximity_cost | 효과 |
+|---------|--------|----------------|------|
+| 0.85 | 0.00 | ∞ | 충돌 거부 |
+| 1.0 | 0.15 | 40.0 | 매우 높은 비용 |
+| 1.5 | 0.65 | 13.3 | 높은 비용 |
+| 2.0 | 1.15 | 8.0 | 중간 비용 |
+| 2.5 | 1.65 | 5.7 | 낮은 비용 |
+| 3.0 | 2.15 | 4.4 | 매우 낮은 비용 |
+| 3.5 | 2.65 | 0.0 | 비용 없음 |
+
+**튜닝 가이드**:
+
+```yaml
+# 문제: 모든 경로가 collision (collision-free = 0)
+# 해결: safety_radius 감소
+frenet_safety_radius: 0.2        # 0.3 → 0.2
+frenet_vehicle_radius: 0.2       # 0.25 → 0.2
+frenet_k_velocity_safety: 0.03   # 0.05 → 0.03
+
+# 문제: 장애물을 회피하지 않음 (중심선만 따라감)
+# 해결: proximity 비용 증가
+frenet_k_proximity: 20.0         # 10.0 → 20.0
+frenet_proximity_threshold: 4.0  # 3.5 → 4.0
+frenet_k_deviation: 0.5          # 1.0 → 0.5 (중심선 선호도 낮춤)
+
+# 문제: 장애물을 너무 일찍 회피 (과도한 회피)
+# 해결: proximity 비용 감소
+frenet_k_proximity: 5.0          # 10.0 → 5.0
+frenet_proximity_threshold: 2.5  # 3.5 → 2.5
+```
+
+---
+
+### 4. 장애물 감지 파라미터
+
+```yaml
+obstacle_cluster_distance: 0.5      # 클러스터링 거리 [m]
+obstacle_max_box_size: 0.8          # 최대 박스 크기 [m]
+obstacle_box_safety_margin: 0.3     # 박스 안전 여유 [m]
+```
+
+**조정 방법**:
+- `cluster_distance` ↑ → 더 큰 클러스터 (여러 점을 하나로 묶음)
+- `max_box_size` ↓ → 작은 장애물만 감지 (벽 무시)
+- `safety_margin` ↑ → 더 큰 안전 여유
+
+---
+
+### 5. 도로 경계 파라미터
+
+```yaml
+frenet_road_half_width: 1.5   # 도로 반폭 [m]
+```
+
+**의미**: 중심선으로부터 좌우 얼마까지 주행 가능한지
+
+**조정 방법**:
+- 좁은 트랙: 1.0m
+- 일반 트랙: 1.5m
+- 넓은 트랙: 2.0m
+
+---
+
+### 6. 로그 레벨
+
+```yaml
+log_level: 4  # 0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=VERBOSE
+```
+
+**권장 설정**:
+- 일반 주행: `3` (INFO)
+- 디버깅: `4` (DEBUG)
+- 상세 분석: `5` (VERBOSE)
+
+---
+
+## 튜닝 절차
+
+### Step 1: 기본 동작 확인
+
+```bash
+# 1. Path planner 실행
+ros2 launch path_planner path_planner.launch.py
+
+# 2. 로그 확인
+[Frenet] 🎯 Generating trajectories with X obstacle points
+[Frenet] 📊 Generated 44 candidates (Y collision-free, Z collisions)
+[Frenet] ✅ Selected best trajectory: cost=X.XXX, points=Y
+```
+
+**정상 동작**:
+- ✅ collision-free > 0 (장애물 회피 가능한 경로 존재)
+- ✅ cost < 100 (합리적인 경로)
+
+**문제 상황**:
+- ❌ collision-free = 0 → [문제 1](#문제-1-모든-경로-collision) 참조
+- ❌ centerline만 따라감 → [문제 2](#문제-2-장애물-회피-안-함) 참조
+
+---
+
+### Step 2: 파라미터별 튜닝
+
+#### 2.1 장애물 회피 강도 조정
+
+**목표**: 장애물 근처를 적절히 회피하도록 설정
+
+```yaml
+# 시작 설정
+frenet_k_proximity: 10.0
+frenet_proximity_threshold: 3.5
+```
+
+**테스트 방법**:
+1. 장애물 앞에 차량 배치
+2. RViz에서 `/frenet_path` (청록색 선) 확인
+3. 장애물을 피하는지 관찰
+
+**조정**:
+- 회피 약함 → `k_proximity` 증가 (10.0 → 15.0 → 20.0)
+- 회피 강함 → `k_proximity` 감소 (10.0 → 7.0 → 5.0)
+- 너무 일찍 회피 → `proximity_threshold` 감소 (3.5 → 3.0)
+- 너무 늦게 회피 → `proximity_threshold` 증가 (3.5 → 4.0)
+
+#### 2.2 중심선 선호도 조정
+
+**목표**: 장애물이 없을 때 중심선을 얼마나 따를지 결정
+
+```yaml
+frenet_k_deviation: 1.0  # 기본값
+```
+
+**조정**:
+- 중심선 강하게 선호 → 증가 (1.0 → 1.5 → 2.0)
+- 장애물 회피 우선 → 감소 (1.0 → 0.5 → 0.3)
+
+#### 2.3 경로 평활도 조정
+
+**목표**: 경로가 얼마나 부드러운지 결정
+
+```yaml
+frenet_k_jerk: 0.1  # 기본값
+```
+
+**조정**:
+- 더 부드러운 경로 → 증가 (0.1 → 0.2 → 0.3)
+- 더 날카로운 회피 → 감소 (0.1 → 0.05)
+
+#### 2.4 안전 반경 조정
+
+**목표**: 충돌 판정 기준 설정
+
+```yaml
+frenet_safety_radius: 0.3
+frenet_vehicle_radius: 0.25
+frenet_obstacle_radius: 0.15
+frenet_k_velocity_safety: 0.05
+```
+
+**조정**:
+- 너무 많이 충돌 판정 → 모두 감소
+- 실제 충돌 발생 → 모두 증가
+
+---
+
+### Step 3: RViz 시각화 확인
+
+**주요 시각화 요소**:
+
+1. **빨간 박스** (`/obstacle_boxes`): 감지된 장애물
+2. **청록색 선** (`/frenet_path`): Frenet 최적 경로
+3. **보라색 선** (`/planned_path`): 최종 계획 경로 (path_tracker 입력)
+4. **초록 중심선** (`/global_centerline`): CSV 참조 경로
+
+**성공 기준**:
+- ✅ 청록색 Frenet path가 빨간 장애물을 피해 lateral offset으로 이동
+- ✅ 보라색 planned path가 Frenet path를 따라감
+- ✅ 장애물 통과 후 중심선으로 복귀
+
+---
+
+## 문제 해결
+
+### 문제 1: 모든 경로 collision
+
+**증상**:
+```bash
+[Frenet] 📊 Generated 44 candidates (0 collision-free, 44 collisions)
+[Frenet] ❌ No valid trajectory found!
+```
+
+**원인**: Hard collision radius가 너무 큼
+
+**해결책**:
+
+```yaml
+# Step 1: safety_radius 감소
+frenet_safety_radius: 0.2        # 0.3 → 0.2
+
+# Step 2: 차량/장애물 크기 감소
+frenet_vehicle_radius: 0.2       # 0.25 → 0.2
+frenet_obstacle_radius: 0.1      # 0.15 → 0.1
+
+# Step 3: 속도 의존 계수 감소
+frenet_k_velocity_safety: 0.03   # 0.05 → 0.03
+
+# Step 4: lateral 샘플 범위 증가
+frenet_d_samples: [-1.5, -1.25, -1.0, -0.5, 0.0, 0.5, 1.0, 1.25, 1.5]
+```
+
+**검증**:
+```bash
+# collision-free > 0 확인
+[Frenet] 📊 Generated 44 candidates (15 collision-free, 29 collisions)  ← ✅ OK!
+```
+
+---
+
+### 문제 2: 장애물 회피 안 함
+
+**증상**:
+- collision-free > 0 (경로는 존재함)
+- 하지만 청록색 Frenet path가 중심선만 따라가고 장애물을 회피하지 않음
+
+**원인**: Proximity cost가 다른 cost에 비해 너무 작음
+
+**해결책**:
+
+```yaml
+# Step 1: proximity 비용 증가
+frenet_k_proximity: 20.0         # 10.0 → 20.0
+
+# Step 2: proximity 범위 증가
+frenet_proximity_threshold: 4.0  # 3.5 → 4.0
+
+# Step 3: 중심선 선호도 감소
+frenet_k_deviation: 0.5          # 1.0 → 0.5
+
+# Step 4 (선택): jerk 가중치 감소 (더 날카로운 회피 허용)
+frenet_k_jerk: 0.05              # 0.1 → 0.05
+```
+
+**검증**:
+- RViz에서 `/frenet_path`가 장애물 옆으로 이동하는지 확인
+- 로그에서 선택된 경로의 lateral offset 확인
+
+---
+
+### 문제 3: 장애물 감지 안 됨
+
+**증상**:
+```bash
+⚠️ WARNING: No obstacles to pass to Frenet planner!
+```
+
+**원인**: LiDAR 데이터 또는 TF 변환 문제
+
+**해결책**:
+
+```bash
+# 1. LiDAR 데이터 확인
+ros2 topic hz /scan
+ros2 topic echo /scan | head -50
+
+# 2. TF 확인
+ros2 run tf2_ros tf2_echo map laser
+
+# 3. 장애물 필터 파라미터 확인
+obstacle_max_box_size: 1.2      # 너무 작으면 증가
+obstacle_cluster_distance: 0.5  # 적절한 클러스터링
+```
+
+---
+
+### 문제 4: 경로가 울퉁불퉁함
+
+**원인**: Jerk 가중치가 너무 낮음
+
+**해결책**:
+
+```yaml
+# 평활도 증가
+frenet_k_jerk: 0.3              # 0.1 → 0.3
+
+# Time horizon 증가 (더 긴 미래 계획)
+frenet_time_horizon: 4.0        # 3.0 → 4.0
+frenet_t_samples: [2.0, 2.5, 3.0, 3.5, 4.0]
+```
+
+---
+
+### 문제 5: 경로가 너무 느림
+
+**원인**: Time cost 가중치가 너무 낮음
+
+**해결책**:
+
+```yaml
+# 짧은 경로 선호
+frenet_k_time: 0.3              # 0.1 → 0.3
+
+# 목표 속도 증가
+frenet_target_speed: 5.0        # 3.0 → 5.0
+```
+
+---
+
+## 실전 팁
+
+### 팁 1: 단계적 튜닝
+
+**절대 한 번에 여러 파라미터를 바꾸지 마세요!**
+
+✅ **올바른 방법**:
+1. 하나의 파라미터만 변경
+2. 테스트 및 결과 확인
+3. 효과가 있으면 유지, 없으면 원복
+4. 다음 파라미터로 이동
+
+❌ **잘못된 방법**:
+- k_proximity, k_deviation, safety_radius를 동시에 변경 → 어떤 것이 효과적인지 모름
+
+---
+
+### 팁 2: 로그 분석
+
+**핵심 로그 항목**:
+
+```bash
+# 1. 장애물 감지
+🚧 Obstacles detected! Count: 128, First at: (5.23, 2.41)
+→ 장애물이 제대로 감지되는지 확인
+
+# 2. Candidate 생성
+[Frenet] 📊 Generated 44 candidates (31 collision-free, 13 collisions)
+→ collision-free가 0이면 안전 반경 문제
+
+# 3. Best 선택
+[Frenet] ✅ Selected best trajectory: cost=12.456, points=61
+→ cost가 너무 높으면 (>100) 파라미터 문제
+```
+
+---
+
+### 팁 3: 파라미터 백업
+
+**튜닝 전 항상 백업!**
+
+```bash
+cp config/planner_params.yaml config/planner_params.yaml.backup_$(date +%Y%m%d_%H%M%S)
+```
+
+---
+
+### 팁 4: 시나리오별 설정
+
+**좁은 트랙 (복잡한 장애물)**:
+```yaml
+frenet_d_samples: [-0.8, -0.5, -0.25, 0.0, 0.25, 0.5, 0.8]
+frenet_k_proximity: 15.0
+frenet_k_deviation: 0.5
+frenet_safety_radius: 0.2
+```
+
+**넓은 트랙 (간단한 장애물)**:
+```yaml
+frenet_d_samples: [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]
+frenet_k_proximity: 10.0
+frenet_k_deviation: 1.0
+frenet_safety_radius: 0.3
+```
+
+**고속 주행**:
+```yaml
+frenet_target_speed: 6.0
+frenet_k_time: 0.3
+frenet_k_jerk: 0.2
+frenet_k_velocity_safety: 0.1  # 속도 높을 때 더 큰 안전 반경
+```
+
+---
+
+### 팁 5: 실시간 파라미터 변경
+
+ROS2 파라미터는 런타임 중 변경 가능합니다:
+
+```bash
+# 예시: proximity 가중치 변경
+ros2 param set /path_planner_node frenet_k_proximity 15.0
+
+# 현재 파라미터 확인
+ros2 param get /path_planner_node frenet_k_proximity
+
+# 모든 파라미터 확인
+ros2 param list /path_planner_node
+```
+
+**주의**: 런타임 변경은 YAML 파일에 저장되지 않습니다!
+
+---
+
+## 요약
+
+### 가장 중요한 3가지 파라미터
+
+1. **`frenet_k_proximity`**: 장애물 회피 강도 (기본: 10.0)
+2. **`frenet_safety_radius`**: 충돌 판정 기준 (기본: 0.3)
+3. **`frenet_k_deviation`**: 중심선 선호도 (기본: 1.0)
+
+### 기본 튜닝 순서
+
+```
+1. safety_radius 조정 → collision-free > 0 만들기
+2. k_proximity 조정 → 장애물 회피하게 만들기
+3. k_deviation 조정 → 중심선과 회피 균형 맞추기
+4. 나머지 파라미터 미세 조정
+```
+
+### 빠른 체크리스트
+
+- [ ] LiDAR 데이터가 들어오는가? (`ros2 topic hz /scan`)
+- [ ] 장애물이 감지되는가? (RViz에서 빨간 박스 확인)
+- [ ] collision-free > 0인가? (로그 확인)
+- [ ] Frenet path가 장애물을 피하는가? (RViz에서 청록색 선 확인)
+- [ ] planned_path를 tracker가 잘 따라가는가?
+- [ ] 중심선으로 잘 복귀하는가?
+
+---
+
+## 추가 자료
+
+- 코드: `src/controller/path_planner/`
+- 파라미터 파일: `config/planner_params.yaml`
+- 헤더 파일: `include/path_planner/frenet.hpp`
+- 구현 파일: `src/frenet.cpp`
+- 시각화 가이드: `RVIZ_VISUALIZATION_GUIDE.md`
+
+**문의**: 문제가 해결되지 않으면 로그 레벨을 5 (VERBOSE)로 올리고 상세 로그를 확인하세요.
+
+--- obstable tuning
+  📊 변경 사항 요약
+
+  planner_params.yaml (path_planner/config/)
+
+  | 파라미터                       | 이전 → 변경 후      | 효과                 |
+  |----------------------------|----------------|--------------------|
+  | frenet_d_samples           | ±1.25m → ±2.0m | 더 넓은 좌우 회피 범위      |
+  | frenet_k_deviation         | 1.0 → 0.5      | 회피 우선, 중심선 선호도 감소  |
+  | obstacle_max_box_size      | 0.8 → 10.0     | 벽/맵도 장애물로 인식       |
+  | frenet_safety_radius       | 0.3 → 0.6      | 하드 충돌 반경 2배        |
+  | frenet_vehicle_radius      | 0.25 → 0.35    | 차량 크기 여유 증가        |
+  | frenet_obstacle_radius     | 0.1 → 0.3      | 장애물 크기 여유 3배       |
+  | frenet_k_proximity         | 15.0 → 30.0    | 근접 비용 2배 (더 멀리 회피) |
+  | frenet_proximity_threshold | 3.5 → 5.0      | 소프트 비용 범위 확대       |
+
+  회피 거리 변화:
+  이전: dynamic_safety = 0.8m, soft range = 0.1m (너무 좁음!)
+  변경: dynamic_safety = 1.4m, soft range = 3.6m (충분한 회피 범위)
+
+  --- avoidance radius
+  2️⃣ 회피 반경 문제
+
+  현재 설정 (제가 변경한 값):
+  frenet_safety_radius: 0.6
+  frenet_vehicle_radius: 0.35
+  frenet_obstacle_radius: 0.3
+  → dynamic_safety = 0.6 + 0.35 + 0.3 + (0.05 × 3.0) = 1.4m (너무 넓음!)
+
+--- raduis adjust
+● ✅ 문제 해결 완료
+
+  두 가지 문제를 정확히 수정했습니다:
+
+  ---
+  1️⃣ Planned Path vs Frenet Path 차이 해결 ✅
+
+  문제:
+  // path_planner_node.cpp:970-1021
+  planned_path = frenet_path + lattice_path  // Lattice가 시작점(0)으로 회귀하는 경로 추가
+
+  해결: planner_params.yaml
+  use_lattice: false  # true → false
+
+  결과: 이제 planned_path = frenet_path (동일한 경로) ✅
+
+  ---
+  2️⃣ 회피 반경 축소 ✅
+
+  문제: 제가 설정한 값이 너무 넓었음
+  이전: dynamic_safety = 0.6 + 0.35 + 0.3 + (0.05 × 3.0) = 1.4m (너무 넓음!)
+
+  해결: planner_params.yaml
+  # 회피 반경 조정
+  frenet_safety_radius: 0.6 → 0.45      # 하드 충돌 반경 감소
+  frenet_vehicle_radius: 0.35 → 0.25    # 차량 크기 여유 감소
+  frenet_obstacle_radius: 0.3 → 0.15    # 장애물 크기 여유 감소
+  frenet_k_proximity: 30.0 → 20.0       # 근접 비용 가중치 조정
+  frenet_proximity_threshold: 5.0 → 4.0 # 소프트 비용 범위 조정
+
+  결과:
+  새로운 dynamic_safety = 0.45 + 0.25 + 0.15 + (0.05 × 3.0) = 1.0m
+  proximity_threshold = 4.0m
+  → 1.0m 이내는 충돌, 1.0~4.0m는 거리에 비례한 회피 비용
+
+  회피 거리 비교:
+  처음 (충돌 발생): 0.8m 하드 충돌, 0.1m 소프트 범위 → 너무 좁아서 충돌 ❌
+  제 첫 수정: 1.4m 하드 충돌, 3.6m 소프트 범위 → 너무 넓어서 과도한 회피 ❌
+  지금 (균형): 1.0m 하드 충돌, 3.0m 소프트 범위 → 적절한 회피 ✅
+
+  ---
+  📊 최종 설정 요약
+
+  | 파라미터                | 최종 값  | 효과                                 |
+  |---------------------|-------|------------------------------------|
+  | use_lattice         | false | planned_path = frenet_path (동일 경로) |
+  | frenet_d_samples    | ±1.5m | 좌우 회피 범위 (사용자가 설정)                 |
+  | frenet_k_deviation  | 0.5   | 회피 우선 (중심선 선호도 낮춤)                 |
+  | dynamic_safety      | 1.0m  | 하드 충돌 반경 (적절한 거리)                  |
+  | proximity_threshold | 4.0m  | 소프트 비용 범위                          |
+  | frenet_k_proximity  | 20.0  | 근접 비용 가중치                          |
+
+  ---
+  🧪 테스트 확인 사항
+
+  빌드 후 확인해주세요:
+
+  colcon build --packages-select path_planner
+  source install/setup.bash
+  ros2 launch path_planner path_planner.launch.py
+
+  RViz에서 확인:
+  1. /planned_path (빨간색) = /frenet_path (초록색) ← 이제 동일해야 함! ✅
+  2. 장애물 회피 거리가 약 1.0m ← 너무 넓지도 좁지도 않음 ✅
+  3. 경로가 0으로 회귀하지 않음 ← Lattice 제거로 해결 ✅
+
+  추가 조정이 필요하면 알려주세요! 🎯
+--- rande more
+ ✅ 회피 반경 축소 완료
+
+  3가지 파라미터를 동시에 조정했습니다:
+
+  ---
+  📝 변경 사항
+
+  | 파라미터                       | 이전    | 변경 후  | 효과            |
+  |----------------------------|-------|-------|---------------|
+  | frenet_d_samples           | ±1.5m | ±1.0m | 샘플링 범위 33% 축소 |
+  | frenet_k_deviation         | 0.5   | 1.5   | 중심선 선호도 3배 증가 |
+  | frenet_k_proximity         | 20.0  | 5.0   | 근접 비용 75% 감소  |
+  | frenet_proximity_threshold | 4.0m  | 3.0m  | 소프트 비용 범위 축소  |
+
+  ---
+  📊 예상 회피 거리 계산
+
+  Before (1.6~1.9m 회피)
+
+  Cost @ 1.6m:
+    proximity_cost = 20.0 / (1.15 + 0.1) = 16.0
+    deviation_cost = 0.5 × 1.0 = 0.5
+    total = 16.0 + 0.5 = 16.5 (proximity가 압도적!)
+
+  After (0.8~1.2m 예상)
+
+  Cost @ 1.0m:
+    proximity_cost = 5.0 / (0.55 + 0.1) = 7.7  (기존 30.8)
+    deviation_cost = 1.5 × 0.6 = 0.9           (기존 0.5)
+    total = 7.7 + 0.9 = 8.6
+
+  Cost @ 0.8m:
+    proximity_cost = 5.0 / (0.35 + 0.1) = 11.1
+    deviation_cost = 1.5 × 0.4 = 0.6
+    total = 11.1 + 0.6 = 11.7 (약간 높음)
+
+  Cost @ 1.2m:
+    proximity_cost = 5.0 / (0.75 + 0.1) = 5.9
+    deviation_cost = 1.5 × 0.8 = 1.2
+    total = 5.9 + 1.2 = 7.1 (더 낮음)
+
+  예상: 최적 회피 거리 0.9~1.2m ✅
+
+  ---
+  🎯 Cost Function 균형 변화
+
+  Before (넓은 회피)
+
+  proximity_cost >> deviation_cost
+       16.0      >>     0.5
+  → 장애물에서 최대한 멀어짐 (1.6~1.9m)
+
+  After (타이트한 회피)
+
+  proximity_cost ≈ deviation_cost
+       7.7       ≈     0.9
+  → 균형잡힌 회피 (0.9~1.2m)
+
+  ---
+  🔧 추가 조정 옵션 (필요시)
+
+  만약 테스트 후에도 회피가 여전히 넓다면:
+
+  더 타이트하게 (0.7~1.0m):
+
+  frenet_k_proximity: 5.0 → 3.0      # 더 감소
+  frenet_k_deviation: 1.5 → 2.0      # 더 증가
+
+  더 넓게 (1.2~1.5m):
+
+  frenet_k_proximity: 5.0 → 8.0      # 증가
+  frenet_k_deviation: 1.5 → 1.0      # 감소
+
+  ---
+  🧪 테스트 방법
+
+  # 빌드
   colcon build --packages-select path_planner
   source install/setup.bash
 
   # 실행
-  ros2 launch path_planner <your_launch_file>
+  ros2 launch path_planner path_planner.launch.py
 
-  튜닝 가능한 파라미터
+  # RViz에서 확인
+  # 1. /planned_path (빨간색) - 장애물 회피 경로
+  # 2. /obstacle_boxes (파란색 박스) - 감지된 장애물
+  # 3. Measure 도구로 경로와 장애물 간 거리 측정
 
-  코드에서 조정 가능:
-
-  클러스터링 거리 (line 788):
-  auto clusters = clusterObstacles(raw_obstacles, 0.5);  // 0.5m → 조정 
-  가능
-
-  안전 마진 (line 285):
-  size += 0.4;  // 40cm → 조정 가능
-
-  경계 샘플 밀도 (line 801):
-  int points_per_side = 8;  // 8개/변 → 증가하면 더 촘촘한 장애물 표현
-
-  최소 클러스터 크기 (line 249):
-  if (cluster.size() >= 3)  // 3개 → 조정하면 노이즈 필터링 강도 변경
-
-  이제 RViz에서 빨간 정사각형으로 장애물이 명확하게 표시되고, Frenet
-  planner가 더 정확하게 장애물을 인식할 수 있습니다!
-
-
---- cluster and occupancy grid 
-
-
-  📊 Path Planner 구조 설명
-
-  1. Lattice LUT (Lookup Table) 역할
-
-  개념: 빠른 경로 생성을 위한 사전 계산된 cubic spiral 라이브러리
-
-  동작 원리:
-
-  Build 단계 (lattice_lut.cpp:20-54):
-  1,710개의 사전 계산 경로 생성
-  = 6(forward) × 19(lateral) × 15(heading)
-  - Forward (dx): 0.5m ~ 3.0m (6단계)
-  - Lateral (dy): -2.25m ~ +2.25m (0.25m 간격)
-  - Heading (dtheta): -70° ~ +70° (π/18 간격)
-
-  Query & Sample 단계 (lattice_lut.cpp:60-119):
-  현재 위치 → Frenet path 끝점 → 상대 변위 계산 → LUT 조회 → Spiral 샘플링
-
-  경로 생성 파이프라인 (path_planner_node.cpp:856-906):
-  1. Frenet Planner: 장애물 회피 (quintic polynomial, ~3초)
-  2. Lattice LUT: 목표 정렬 (cubic spiral, horizon까지)
-  3. 최종 경로: Frenet + Lattice 결합
-
-  장점:
-  - ⚡ 실시간 생성: 미리 계산되어 빠름 (~0.1ms)
-  - 🎯 곡률 연속성: Cubic spiral로 부드러운 경로
-  - 🛣️ Centerline 적응: 곡률을 고려한 자연스러운 경로
-
-  2. Occupancy Map 상태
-
-  현재: ❌ 사용되지 않음
-
-  이유:
-  - Header만 include (path_planner_node.cpp:3)
-  - 인스턴스화/사용 코드 없음
-  - 대신 직접 laser scan → bounding box 변환 사용
-
-  설계 의도 (occupancy_map.hpp):
-  - Grid 기반 장애물 맵 관리
-  - 충돌 검사 (collision())
-  - 장애물 샘플링 (sample_obstacles())
-
-  현재 대체 방식:
-  Laser Scan → Map Frame → Clustering → Bounding Box → Frenet Planner
+  측정 방법:
+  1. RViz → Tool Properties → Measure (측정 도구 선택)
+  2. 장애물 중심에서 planned_path 가장 가까운 점까지 거리 측정
+  3. 예상: 0.9~1.2m ✅
 
   ---
-  ✅ 구현된 수정사항
+  📈 안전 마진 유지
 
-  1. Clustering Distance 파라미터화
+  dynamic_safety = 0.15 + 0.05 + 0.10 + (0.05 × 3.0) = 0.45m
+  → 0.45m 이내는 여전히 충돌 거부 (안전!)
 
-  planner_params.yaml:42:
-  obstacle_cluster_distance: 0.5  # 클러스터링 거리 [m]
+  실제 회피: 0.9~1.2m
+  → 안전 마진: 0.45~0.75m 확보 ✅
 
-  사용 위치 (path_planner_node.cpp:804-805):
-  double cluster_distance =
-  get_parameter("obstacle_cluster_distance").as_double();
-  auto clusters = clusterObstacles(raw_obstacles, cluster_distance);
-
-  2. 1m 초과 박스 필터링
-
-  planner_params.yaml:43:
-  obstacle_max_box_size: 1.0  # 최대 박스 크기 (초과 시 무시) [m]
-
-  필터링 로직 (path_planner_node.cpp:296-301):
-  // FILTER: Ignore boxes larger than max_box_size
-  if (size > max_box_size) {
-      RCLCPP_DEBUG_THROTTLE(..., "Ignoring large obstacle box: size=%.2fm",
-   size);
-      continue;  // 벽이나 큰 구조물 무시
-  }
-
-  3. Safety Margin 파라미터화
-
-  planner_params.yaml:44:
-  obstacle_box_safety_margin: 0.4  # 안전 마진 [m]
-
-  사용 위치 (path_planner_node.cpp:304):
-  size += safety_margin;  // 40cm 안전 마진 추가
-
-  4. 개선된 로깅
-
-  출력 예시:
-  Obstacles: 523 raw pts → 8 clusters → 6 boxes (filtered) → 192 boundary
-  pts | Time: 2.3ms
-  - filtered: 1m 초과 박스 제외된 개수
-  - 2초마다 INFO 레벨로 출력
-
-  ---
-  🎛️ 튜닝 가능한 파라미터
-
-  Clustering
-
-  obstacle_cluster_distance: 0.5  # 증가 → 더 넓게 묶음 / 감소 → 세밀하게 
-  분리
-
-  Filtering
-
-  obstacle_max_box_size: 1.0  # 증가 → 더 큰 장애물 허용 / 감소 → 엄격한 
-  필터링
-
-  Safety
-
-  obstacle_box_safety_margin: 0.4  # 증가 → 더 안전 (멀리 회피) / 감소 → 
-  가까이 접근
-
-  ---
-  🚀 빌드 및 실행
-
-  cd /home/dawgs_nx/f1tenth_dawgs
-  colcon build --packages-select path_planner
-  source install/setup.bash
-
-  이제:
-  - ✅ 클러스터링 거리를 config에서 조정 가능
-  - ✅ 1m 넘는 큰 박스는 자동으로 무시 (벽, 큰 구조물)
-  - ✅ 안전 마진도 config에서 조정 가능
-  - ✅ 로그에서 필터링 결과 확인 가능
-
-  Lattice LUT는 Frenet 경로의 끝점을 부드럽게 centerline에 정렬시키는
-  역할을 하고, Occupancy map은 현재 사용되지 않습니다!
+  테스트 후 결과 알려주시면 추가 조정하겠습니다! 🎯

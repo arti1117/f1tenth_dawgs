@@ -121,7 +121,23 @@ std::vector<FrenetTraj> FrenetPlanner::generate(const FrenetState& fs, const std
                 for(size_t i=2;i<tr.d.size();++i){ j_lat += std::abs(tr.d[i]-2*tr.d[i-1]+tr.d[i-2]); }
                 double dev = std::accumulate(tr.d.begin(), tr.d.end(), 0.0, [](double a,double b){return a+std::abs(b);} )/tr.d.size();
                 double v_err=0.0; // omitted for brevity
-                tr.cost = p_.k_j*j_lat + p_.k_t*T + p_.k_d*dev + p_.k_v*v_err;
+
+                // ADDED: Obstacle proximity cost (soft penalty for being near obstacles)
+                double obs_cost = 0.0;
+                for(size_t i=0; i<tr.x.size(); ++i){
+                    for(const auto &ob: obstacles){
+                        double dist = distance(tr.x[i], tr.y[i], ob.first, ob.second);
+                        // Apply soft cost for obstacles within proximity threshold
+                        if(dist < p_.proximity_threshold && dist > p_.safety_radius){
+                            // Inverse distance cost: closer = higher cost
+                            // Cost increases exponentially as distance approaches safety_radius
+                            double normalized_dist = (dist - p_.safety_radius) / (p_.proximity_threshold - p_.safety_radius);
+                            obs_cost += p_.k_proximity * (1.0 - normalized_dist);
+                        }
+                    }
+                }
+
+                tr.cost = p_.k_j*j_lat + p_.k_t*T + p_.k_d*dev + p_.k_v*v_err + obs_cost;
                 cands.push_back(std::move(tr));
             }
         }
