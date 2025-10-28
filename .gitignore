@@ -48,3 +48,4 @@ dist/
 .idea/
 *.swp
 *.swo
+bag/
