@@ -434,3 +434,17 @@
   - claudedocs/QOS_POLICY_GUIDE.md (업데이트)
   - claudedocs/QOS_CHANGES_SUMMARY.md (신규)
 
+--- cartographer tf
+
+● 현재 상황을 확인했습니다:
+
+  bringup_launch.py:148 - VESC tf:
+  - arguments=['0.07', '0.0', '0.05', '0.0', '0.0', '0.7071068', '0.7071068', 'base_link',
+   'vesc']
+  - quaternion (0, 0, 0.7071068, 0.7071068) = Z축 기준 90도 회전
+
+  bringup_launch.py:142 - Laser tf:
+  - arguments=['0.27', '0.0', '0.11', '0.0', '0.0', '0.0', 'base_link', 'laser']
+  - (yaw, pitch, roll) = (0, 0, 0) = 회전 없음
+
+  VESC tf를 laser와 같은 방향(회전 없음)으로 수정하겠습니다: -> 수정하지 않았음.
