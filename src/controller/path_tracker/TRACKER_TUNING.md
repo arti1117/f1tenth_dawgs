@@ -527,3 +527,87 @@ Test the changes and adjust further based on observed behavior.
   k_error: -0.4
 
   가이드에 모든 파라미터의 의미, 효과, 튜닝 방법이 상세히 설명되어 있습니다!
+
+--- tuning guide v2
+● Path tracker의 조향 구조와 문제점을 분석했습니다.
+
+  📊 Path Tracker 조향 구조
+
+  1️⃣ Pure Pursuit 기반 조향 (path_tracker_node.cpp:497-520)
+
+  Lookahead point → Vehicle frame 변환 → Pure pursuit 공식
+  steering = atan2(2 * wheelbase * sin(α), L)
+  - α: 차량에서 lookahead point까지 각도
+  - L: lookahead 거리
+
+  2️⃣ Stanley Controller 보정 추가 (line:1019-1044)
+
+  Total correction = stanley_term + heading_error
+  - stanley_term = atan(stanley_k * lateral_error / velocity)
+  - heading_error = path_yaw - vehicle_yaw
+
+  3️⃣ 최종 조향 계산 (line:356-370)
+
+  Combined steering = Pure Pursuit + Stanley correction
+  → Low-pass filter 적용
+  → Max steering angle clamp
+
+  ⚠️ 현재 문제점 진단
+
+  🔴 Critical Issue #1: 너무 짧은 Lookahead
+
+  lookahead_base: 0.3m        # 기본값이 너무 짧음
+  lookahead_min: 0.4m         # 최소값도 짧음
+  k_error: -0.5               # ❌ 역효과: error 클수록 lookahead 감소
+  문제: Lateral error 발생 → lookahead 감소 → 더 급격한 조향 → 오버슈팅 →
+  악순환
+
+  🟡 Issue #2: Stanley Gain 과민성
+
+  stanley_k: 1.2              # 높은 보정 gain
+  use_stanley: true           # Heading error도 추가
+  문제: Pure pursuit + Stanley 결합 → 과도한 조향 명령 → Oscillation
+
+  🟡 Issue #3: 낮은 필터링 효과
+
+  steering_alpha: 0.9         # 90% 새 값, 10% 이전 값
+  문제: 필터링이 거의 없어서 급격한 조향 변화 허용 → 차량 불안정
+
+  🟢 Issue #4: Adaptive Lookahead 역효과
+
+  // line:1001 - Error 증가 시 lookahead 감소 (잘못된 로직)
+  error_adjustment = -k_error_ * std::abs(lateral_error);
+  adaptive_lookahead = lookahead_min_ + curv_adjustment + error_adjustment;
+  올바른 동작: Error 클 때 → lookahead 증가 → 부드러운 복귀현재 동작: Error
+  클 때 → lookahead 감소 → 급격한 조향 → 더 큰 error
+
+  💡 권장 수정사항
+
+  Priority 1: Lookahead 증가
+
+  lookahead_base: 1.0  # 0.3 → 1.0
+  lookahead_min: 0.8   # 0.4 → 0.8
+  k_error: 0.3         # -0.5 → 0.3 (부호 반전, error 클수록 lookahead 증가)
+
+  Priority 2: Stanley Gain 감소
+
+  stanley_k: 0.3       # 1.2 → 0.3 (75% 감소)
+  # 또는 use_stanley: false  (일시적으로 비활성화 테스트)
+
+  Priority 3: 필터링 강화
+
+  steering_alpha: 0.3  # 0.9 → 0.3 (부드러운 조향)
+
+  Priority 4: Curvature Gain 조정
+
+  k_curvature: 1.0     # 0.5 → 1.0 (곡률에 더 민감하게 반응)
+
+  🔍 추가 검증 사항
+
+  1. Lookahead 시각화 확인: /lookahead_point 토픽에서 lookahead point가 너무
+   가까운지 RViz로 확인
+  2. Lateral error 모니터링: DEBUG 로그에서 lat_err 값이 oscillation 하는지
+  확인
+  3. Steering 변화율: 조향각이 급격하게 변하는지 /drive 토픽 모니터링
+
+  수정 후에도 문제가 지속되면 말씀해주세요!

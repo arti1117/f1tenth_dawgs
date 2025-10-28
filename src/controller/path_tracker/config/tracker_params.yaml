@@ -10,16 +10,16 @@ path_tracker_node:
     lookahead_min: 0.4           # Minimum lookahead distance [m]
     lookahead_max: 3.0           # Maximum lookahead distance [m]
     k_curvature: 0.5             # Curvature-based lookahead gain (L += k_curv / |kappa|)
-    k_error: -0.3                 # Lateral error-based lookahead gain (L -= k_e * |e_y|)
+    k_error: 0.5                 # Lateral error-based lookahead gain (L -= k_e * |e_y|)
     curvature_epsilon: 0.001     # Small value to avoid division by zero in curvature
 
     # Stanley controller parameters (for cutting suppression)
     use_stanley: true            # Enable Stanley term addition to Pure Pursuit
-    stanley_k: 0.8             # Stanley gain for lateral error correction
+    stanley_k: 0.3               # Stanley gain for lateral error correction
 
     # Steering filter parameters (for smooth control)
     use_steering_filter: true    # Enable low-pass filter on steering commands
-    steering_alpha: 0.7          # Filter coefficient (0-1): higher = more responsive, lower = smoother
+    steering_alpha: 0.3          # Filter coefficient (0-1): higher = more responsive, lower = smoother
 
     # Vehicle parameters
     wheelbase: 0.33             # Vehicle wheelbase [m]
@@ -31,11 +31,11 @@ path_tracker_node:
 
     # Debug mode parameters
     debug_mode: true           # CHANGED: Disable debug mode for full performance
-    velocity_gain: 0.2          # CHANGED: Full velocity (was 0.2 = 20% speed limit)
-    debug_min_speed: 0.5        # Minimum speed in debug mode [m/s] (overrides min_speed_limit)
+    velocity_gain: 0.3          # CHANGED: Full velocity (was 0.2 = 20% speed limit)
+    debug_min_speed: 0.6        # Minimum speed in debug mode [m/s] (overrides min_speed_limit)
 
     # Simulation mode parameter
-    sim_mode: true             # Enable simulation mode (inverts steering for simulation compatibility)
+    sim_mode: false             # Enable simulation mode (inverts steering for simulation compatibility)
     sim_odom: "/ego_racecar/odom"
 
     # Speed control mode

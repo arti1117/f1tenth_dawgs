@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /Status1
         - /Map1/Topic1
+        - /LaserScan1
         - /Marker1
         - /MarkerArray1
         - /MarkerArray1/Topic1
@@ -73,8 +74,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: -0.3991906940937042
-        Min Value: -8.848678588867188
+        Max Value: 0.6908140778541565
+        Min Value: -8.861400604248047
         Value: true
       Axis: X
       Channel Name: intensity
@@ -98,7 +99,7 @@ Visualization Manager:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /scan
       Use Fixed Frame: true
       Use rainbow: true
@@ -180,7 +181,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        global_path_velocity: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -192,7 +193,8 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        frenet_path_outline: true
+        frenet_path_velocity: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -204,7 +206,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        obstacle_boxes: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -216,7 +218,7 @@ Visualization Manager:
       Buffer Length: 1
       Class: rviz_default_plugins/Path
       Color: 25; 255; 0
-      Enabled: true
+      Enabled: false
       Head Diameter: 0.30000001192092896
       Head Length: 0.20000000298023224
       Length: 0.30000001192092896
@@ -238,7 +240,7 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /planned_path
-      Value: true
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -282,25 +284,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 7.676607608795166
+      Distance: 12.222620010375977
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -4.190836429595947
-        Y: 2.149927854537964
-        Z: -0.6010630130767822
+        X: -3.7873995304107666
+        Y: 3.492474317550659
+        Z: -0.6023074984550476
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2497961521148682
+      Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 2.0972189903259277
+      Yaw: 1.7572189569473267
     Saved: ~
 Window Geometry:
   Displays:
@@ -316,5 +318,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1046
-  X: 97
-  Y: 74
+  X: 111
+  Y: 98

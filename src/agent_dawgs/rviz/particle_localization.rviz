@@ -9,6 +9,11 @@ Panels:
         - /Odometry2
         - /MarkerArray1/Topic1
         - /MarkerArray2/Topic1
+        - /MarkerArray3
+        - /MarkerArray3/Topic1
+        - /MarkerArray4
+        - /MarkerArray4/Status1
+        - /MarkerArray4/Topic1
       Splitter Ratio: 0.5794117450714111
     Tree Height: 785
   - Class: rviz_common/Selection
@@ -436,6 +441,30 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /global_path_velocity_markers
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /obstacle_boxes
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        wall_boundaries: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wall_markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -477,25 +506,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 23.378826141357422
+      Distance: 12.654364585876465
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 1.4347907304763794
-        Y: 0.42844799160957336
-        Z: 0.801936149597168
+        X: -5.8106560707092285
+        Y: 12.16850471496582
+        Z: -0.6219075322151184
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.474797010421753
+      Pitch: 1.1397970914840698
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 6.1654157638549805
+      Yaw: 2.865415573120117
     Saved: ~
 Window Geometry:
   Displays:

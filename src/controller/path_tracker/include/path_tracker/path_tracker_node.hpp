@@ -122,6 +122,10 @@ private:
   bool path_received_;
   bool global_path_received_;
 
+  // Drive command buffer - maintain last valid command during path updates
+  ackermann_msgs::msg::AckermannDriveStamped last_drive_cmd_;
+  bool has_drive_cmd_;
+
   // ROS interfaces
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
@@ -139,6 +143,11 @@ private:
   LookaheadResult findLookaheadPoint(size_t start_idx, double lookahead_dist);
   double computeSteeringAngle(double px, double py, double yaw,
                               double goal_x, double goal_y);
+
+  // Path interpolation for smoother tracking with low-frequency paths
+  void interpolatePath(const std::vector<PathPoint>& coarse_path,
+                       std::vector<PathPoint>& fine_path,
+                       double resolution = 0.1);
 
   // Adaptive lookahead functions
   double computeCurvatureAtPoint(size_t idx);

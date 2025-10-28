@@ -74,6 +74,16 @@ public:
         declare_parameter<double>("obstacle_max_box_size", 1.0);
         declare_parameter<double>("obstacle_box_safety_margin", 0.4);
 
+        // Wall detection parameters
+        declare_parameter<double>("wall_segment_length", 0.5);  // Break walls into 0.5m segments
+        declare_parameter<double>("wall_segment_width", 0.3);   // Width of wall segments
+        declare_parameter<double>("path_clearance_radius", 1.5); // Filter scan points near global path
+
+        // Performance optimization parameters
+        declare_parameter<int>("scan_downsample_factor", 3);  // Use every Nth scan point (3 = 1/3 of points)
+        declare_parameter<double>("wall_sampling_distance", 0.15);  // Min distance between wall segment samples
+        declare_parameter<bool>("enable_wall_detection", true);  // Toggle wall detection on/off
+
         // Enhanced safety parameters
         declare_parameter<double>("frenet_vehicle_radius", 0.2);
         declare_parameter<double>("frenet_obstacle_radius", 0.15);
@@ -83,14 +93,18 @@ public:
         declare_parameter<double>("frenet_proximity_threshold", 1.5);
         declare_parameter<int>("frenet_interpolation_checks", 3);
 
+        // Path smoothing parameters
+        declare_parameter<bool>("enable_path_smoothing", true);
+        declare_parameter<double>("path_smoothing_alpha", 0.5);  // 0.0 = use previous, 1.0 = use new
+
 
 
         // QoS for sensor data: Best Effort for low latency
         auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(5));
         sensor_qos.best_effort();
 
-        // QoS for path data: Reliable for data integrity
-        auto path_qos = rclcpp::QoS(rclcpp::KeepLast(10));
+        // QoS for path data: Reliable for data integrity with larger buffer
+        auto path_qos = rclcpp::QoS(rclcpp::KeepLast(20));
         path_qos.reliable();
 
         // QoS for visualization: Best Effort, small buffer
@@ -130,6 +144,9 @@ public:
 
         // Obstacle visualization publisher
         pub_obstacle_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/obstacle_boxes", viz_qos);
+
+        // Wall visualization publisher
+        pub_wall_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("/wall_markers", viz_qos);
 
         // init planners with parameters from config
         f1tenth::FrenetParams fp;
@@ -176,11 +193,21 @@ public:
         tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
+        // Initialize path smoothing parameters
+        enable_path_smoothing_ = get_parameter("enable_path_smoothing").as_bool();
+        path_smoothing_alpha_ = get_parameter("path_smoothing_alpha").as_double();
+
         // Timer for publishing global path
         double publish_rate = get_parameter("publish_rate").as_double();
         global_path_timer_ = create_wall_timer(
             std::chrono::duration<double>(1.0 / publish_rate),
             std::bind(&PathPlannerNode::publishGlobalPath, this)
+        );
+
+        // Timer for publishing planned path at high frequency (20 Hz)
+        planned_path_timer_ = create_wall_timer(
+            std::chrono::duration<double>(1.0 / 20.0),
+            std::bind(&PathPlannerNode::publishPlannedPath, this)
         );
 
         RCLCPP_INFO(get_logger(), "Path Planner Node initialized");
@@ -208,6 +235,13 @@ private:
         double center_x, center_y;  // Center position
         double size;                 // Box size (square)
         std::vector<std::pair<double, double>> points;  // Original scan points in this cluster
+    };
+
+    // Wall line segment structure
+    struct WallSegment {
+        double x1, y1;  // Start point
+        double x2, y2;  // End point
+        double width;   // Segment width (perpendicular)
     };
 
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
@@ -400,7 +434,207 @@ private:
             "Visualized %zu obstacle bounding boxes", obstacles.size());
     }
 
+    // Break wall cluster into short line segments
+    std::vector<WallSegment> breakWallIntoSegments(const std::vector<std::pair<double, double>>& wall_cluster)
+    {
+        std::vector<WallSegment> segments;
+
+        if (wall_cluster.size() < 2) {
+            return segments;
+        }
+
+        double segment_length = get_parameter("wall_segment_length").as_double();
+        double segment_width = get_parameter("wall_segment_width").as_double();
+
+        // Sort points along the wall (approximate line fitting)
+        std::vector<std::pair<double, double>> sorted_points = wall_cluster;
+
+        // Simple sequential connection based on proximity
+        for (size_t i = 0; i < sorted_points.size() - 1; ++i) {
+            double x1 = sorted_points[i].first;
+            double y1 = sorted_points[i].second;
+            double x2 = sorted_points[i + 1].first;
+            double y2 = sorted_points[i + 1].second;
+
+            double dist = std::hypot(x2 - x1, y2 - y1);
+
+            // Skip if points are too far apart (disconnected segments)
+            if (dist > segment_length * 2.0) {
+                continue;
+            }
+
+            // If segment is short enough, add directly
+            if (dist <= segment_length) {
+                WallSegment seg;
+                seg.x1 = x1;
+                seg.y1 = y1;
+                seg.x2 = x2;
+                seg.y2 = y2;
+                seg.width = segment_width;
+                segments.push_back(seg);
+            } else {
+                // Break long segment into multiple short segments
+                int num_subsegments = std::ceil(dist / segment_length);
+                double dx = (x2 - x1) / num_subsegments;
+                double dy = (y2 - y1) / num_subsegments;
+
+                for (int j = 0; j < num_subsegments; ++j) {
+                    WallSegment seg;
+                    seg.x1 = x1 + j * dx;
+                    seg.y1 = y1 + j * dy;
+                    seg.x2 = x1 + (j + 1) * dx;
+                    seg.y2 = y1 + (j + 1) * dy;
+                    seg.width = segment_width;
+                    segments.push_back(seg);
+                }
+            }
+        }
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+            "Broke wall cluster with %zu points into %zu segments (segment_length=%.2fm)",
+            wall_cluster.size(), segments.size(), segment_length);
+
+        return segments;
+    }
+
+    // Filter scan points that are near the global path (to avoid detecting path as obstacle)
+    // OPTIMIZED: Use nearest neighbor search with early exit
+    std::vector<std::pair<double, double>> filterScanPointsNearPath(
+        const std::vector<std::pair<double, double>>& scan_points)
+    {
+        if (ref_wps_.empty()) {
+            // No reference path, return all points
+            return scan_points;
+        }
+
+        double clearance_radius = get_parameter("path_clearance_radius").as_double();
+        double clearance_radius_sq = clearance_radius * clearance_radius;  // Use squared distance
+        std::vector<std::pair<double, double>> filtered_points;
+        filtered_points.reserve(scan_points.size());  // Pre-allocate
+
+        // Sample waypoints for faster checking (every 5th waypoint for 1/5 checks)
+        std::vector<const f1tenth::Waypoint*> sampled_wps;
+        sampled_wps.reserve(ref_wps_.size() / 5 + 1);
+        for (size_t i = 0; i < ref_wps_.size(); i += 5) {
+            sampled_wps.push_back(&ref_wps_[i]);
+        }
+
+        for (const auto& pt : scan_points) {
+            bool near_path = false;
+
+            // Check against sampled waypoints only (5x faster)
+            for (const auto* wp : sampled_wps) {
+                double dx = pt.first - wp->x;
+                double dy = pt.second - wp->y;
+                double dist_sq = dx * dx + dy * dy;
+
+                if (dist_sq < clearance_radius_sq) {
+                    near_path = true;
+                    break;
+                }
+            }
+
+            if (!near_path) {
+                filtered_points.push_back(pt);
+            }
+        }
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+            "Filtered scan points: %zu → %zu (removed %zu points near path, radius=%.2fm)",
+            scan_points.size(), filtered_points.size(),
+            scan_points.size() - filtered_points.size(), clearance_radius);
+
+        return filtered_points;
+    }
+
+    // Visualize wall segments in RViz
+    void visualizeWallSegments(const std::vector<WallSegment>& wall_segments)
+    {
+        visualization_msgs::msg::MarkerArray marker_array;
+
+        // Clear previous markers
+        visualization_msgs::msg::Marker clear_marker;
+        clear_marker.header.frame_id = get_parameter("frame_id").as_string();
+        clear_marker.header.stamp = now();
+        clear_marker.ns = "wall_segments";
+        clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_array.markers.push_back(clear_marker);
+
+        // Create markers for each wall segment
+        for (size_t i = 0; i < wall_segments.size(); ++i) {
+            const auto& seg = wall_segments[i];
+
+            // Calculate segment center and orientation
+            double cx = (seg.x1 + seg.x2) / 2.0;
+            double cy = (seg.y1 + seg.y2) / 2.0;
+            double length = std::hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+            double yaw = std::atan2(seg.y2 - seg.y1, seg.x2 - seg.x1);
+
+            // Create box marker for segment
+            visualization_msgs::msg::Marker box_marker;
+            box_marker.header.frame_id = get_parameter("frame_id").as_string();
+            box_marker.header.stamp = now();
+            box_marker.ns = "wall_segments";
+            box_marker.id = i * 2;  // Even IDs for boxes
+            box_marker.type = visualization_msgs::msg::Marker::CUBE;
+            box_marker.action = visualization_msgs::msg::Marker::ADD;
+
+            box_marker.pose.position.x = cx;
+            box_marker.pose.position.y = cy;
+            box_marker.pose.position.z = 0.5;  // Elevate for visibility
+
+            // Set orientation based on segment direction
+            box_marker.pose.orientation.z = std::sin(yaw / 2.0);
+            box_marker.pose.orientation.w = std::cos(yaw / 2.0);
+
+            box_marker.scale.x = length;
+            box_marker.scale.y = seg.width;
+            box_marker.scale.z = 1.0;  // 1m height
+
+            // Blue semi-transparent box for wall segments
+            box_marker.color.r = 0.0;
+            box_marker.color.g = 0.5;
+            box_marker.color.b = 1.0;
+            box_marker.color.a = 0.4;
+
+            marker_array.markers.push_back(box_marker);
+
+            // Create line marker for segment center line
+            visualization_msgs::msg::Marker line_marker;
+            line_marker.header.frame_id = get_parameter("frame_id").as_string();
+            line_marker.header.stamp = now();
+            line_marker.ns = "wall_segments";
+            line_marker.id = i * 2 + 1;  // Odd IDs for lines
+            line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+            line_marker.action = visualization_msgs::msg::Marker::ADD;
+
+            line_marker.scale.x = 0.08;  // Line width
+            line_marker.pose.orientation.w = 1.0;
+
+            // Bright blue line
+            line_marker.color.r = 0.0;
+            line_marker.color.g = 0.7;
+            line_marker.color.b = 1.0;
+            line_marker.color.a = 1.0;
+
+            geometry_msgs::msg::Point p1, p2;
+            p1.x = seg.x1; p1.y = seg.y1; p1.z = 0.0;
+            p2.x = seg.x2; p2.y = seg.y2; p2.z = 0.0;
+
+            line_marker.points.push_back(p1);
+            line_marker.points.push_back(p2);
+
+            marker_array.markers.push_back(line_marker);
+        }
+
+        pub_wall_markers_->publish(marker_array);
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
+            "Visualized %zu wall segments", wall_segments.size());
+    }
+
     // Convert laser scan to obstacles in map frame
+    // OPTIMIZED: Added downsampling for faster processing
     std::vector<std::pair<double, double>> getObstaclesFromScan()
     {
         std::vector<std::pair<double, double>> obstacles;
@@ -440,8 +674,20 @@ private:
         double qz = transform_stamped.transform.rotation.z;
         double yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
 
+        // Pre-compute trig values
+        double cos_yaw = std::cos(yaw);
+        double sin_yaw = std::sin(yaw);
+
+        // Get downsampling factor for performance
+        int downsample = get_parameter("scan_downsample_factor").as_int();
+        downsample = std::max(1, downsample);  // At least 1
+
+        // Reserve space for efficiency
+        obstacles.reserve(latest_scan_.ranges.size() / downsample);
+
         // Convert laser scan points to map frame using TF transform
-        for (size_t i = 0; i < latest_scan_.ranges.size(); ++i) {
+        // OPTIMIZED: Use downsampling (process every Nth point)
+        for (size_t i = 0; i < latest_scan_.ranges.size(); i += downsample) {
             double range = latest_scan_.ranges[i];
 
             // Skip invalid readings
@@ -454,19 +700,20 @@ private:
             // Calculate angle of this laser beam
             double angle = latest_scan_.angle_min + i * latest_scan_.angle_increment;
 
-            // Point in laser frame
+            // Point in laser frame (pre-compute trig)
             double laser_x = range * std::cos(angle);
             double laser_y = range * std::sin(angle);
 
-            // Transform to map frame using TF
-            double map_x = tx + laser_x * std::cos(yaw) - laser_y * std::sin(yaw);
-            double map_y = ty + laser_x * std::sin(yaw) + laser_y * std::cos(yaw);
+            // Transform to map frame using TF (using pre-computed trig)
+            double map_x = tx + laser_x * cos_yaw - laser_y * sin_yaw;
+            double map_y = ty + laser_x * sin_yaw + laser_y * cos_yaw;
 
             obstacles.push_back({map_x, map_y});
         }
 
         RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
-            "Transformed %zu scan points to map frame using TF", obstacles.size());
+            "Transformed %zu scan points to map frame (downsampled by %dx, from %zu points)",
+            obstacles.size(), downsample, latest_scan_.ranges.size());
 
         return obstacles;
     }
@@ -825,24 +1072,70 @@ private:
         // Step 1: Get raw scan points in map frame
         std::vector<std::pair<double,double>> raw_obstacles = getObstaclesFromScan();
 
-        // Step 2: Cluster scan points into obstacle groups
+        // Step 2: Filter out scan points near global path (avoid detecting path as obstacle)
+        std::vector<std::pair<double,double>> filtered_obstacles = filterScanPointsNearPath(raw_obstacles);
+
+        // Step 3: Cluster scan points into obstacle groups
         double cluster_distance = get_parameter("obstacle_cluster_distance").as_double();
-        auto clusters = clusterObstacles(raw_obstacles, cluster_distance);
+        auto clusters = clusterObstacles(filtered_obstacles, cluster_distance);
 
-        // Step 3: Create bounding boxes for each cluster
-        auto obstacle_boxes = createBoundingBoxes(clusters);
+        // Step 4: Separate walls (large clusters) from obstacles (small clusters)
+        double max_box_size = get_parameter("obstacle_max_box_size").as_double();
+        std::vector<ObstacleBox> obstacle_boxes;
+        std::vector<WallSegment> wall_segments;
 
-        // Step 4: Visualize bounding boxes in RViz
+        for (const auto& cluster : clusters) {
+            if (cluster.empty()) continue;
+
+            // Find min/max extents
+            double min_x = std::numeric_limits<double>::max();
+            double max_x = std::numeric_limits<double>::lowest();
+            double min_y = std::numeric_limits<double>::max();
+            double max_y = std::numeric_limits<double>::lowest();
+
+            for (const auto& point : cluster) {
+                min_x = std::min(min_x, point.first);
+                max_x = std::max(max_x, point.first);
+                min_y = std::min(min_y, point.second);
+                max_y = std::max(max_y, point.second);
+            }
+
+            double width = max_x - min_x;
+            double height = max_y - min_y;
+            double size = std::max(width, height);
+
+            // Classify: large = wall (break into segments), small = obstacle (box)
+            if (size > max_box_size) {
+                // Wall: break into short line segments
+                auto segments = breakWallIntoSegments(cluster);
+                wall_segments.insert(wall_segments.end(), segments.begin(), segments.end());
+            } else {
+                // Obstacle: create bounding box
+                double safety_margin = get_parameter("obstacle_box_safety_margin").as_double();
+                ObstacleBox box;
+                box.center_x = (min_x + max_x) / 2.0;
+                box.center_y = (min_y + max_y) / 2.0;
+                box.size = size + safety_margin;
+                box.points = cluster;
+                obstacle_boxes.push_back(box);
+            }
+        }
+
+        // Step 5: Visualize obstacles and wall segments
         visualizeObstacles(obstacle_boxes);
 
-        // Step 5: Convert obstacles to points for Frenet planner
-        // IMPROVED: Include both bounding boxes AND raw scan points (for walls/map)
+        bool enable_wall = get_parameter("enable_wall_detection").as_bool();
+        if (enable_wall) {
+            visualizeWallSegments(wall_segments);
+        }
+
+        // Step 6: Convert obstacles to points for Frenet planner
         std::vector<std::pair<double,double>> obstacles;
 
-        // 5a. Add bounding box perimeter samples (for clustered dynamic obstacles)
+        // 6a. Add bounding box perimeter samples (for clustered dynamic obstacles)
         for (const auto& box : obstacle_boxes) {
             double half_size = box.size / 2.0;
-            int points_per_side = 8;  // Sample 8 points per side for dense coverage
+            int points_per_side = 6;  // REDUCED 8→6: Fewer samples for faster processing
 
             // Sample all 4 sides of the square
             for (int i = 0; i < points_per_side; ++i) {
@@ -854,24 +1147,53 @@ private:
             }
         }
 
-        // 5b. Add raw scan points (for walls, map boundaries, and unclustered obstacles)
-        // Filter: only include points within reasonable distance from vehicle
-        const double max_obstacle_dist = 8.0;  // meters
-        const double min_obstacle_dist = 0.1;  // meters (too close = sensor noise)
-        size_t raw_added = 0;
-        for (const auto& pt : raw_obstacles) {
-            double dist = std::hypot(pt.first - x_compensated, pt.second - y_compensated);
-            if (dist >= min_obstacle_dist && dist <= max_obstacle_dist) {
-                obstacles.push_back(pt);
-                raw_added++;
+        // 6b. Add wall segment samples (for track boundaries modeled as line segments)
+        // OPTIMIZED: Adaptive sampling based on segment length
+        size_t wall_points_added = 0;
+        if (enable_wall) {
+            double min_sample_dist = get_parameter("wall_sampling_distance").as_double();
+
+            for (const auto& seg : wall_segments) {
+                double seg_length = std::hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+
+                // Calculate optimal number of samples based on segment length
+                int points_per_segment = std::max(2, static_cast<int>(seg_length / min_sample_dist));
+                points_per_segment = std::min(points_per_segment, 5);  // Cap at 5 points
+
+                int width_samples = 2;  // REDUCED 3→2: Only edges for faster processing
+
+                for (int i = 0; i < points_per_segment; ++i) {
+                    double t_length = static_cast<double>(i) / std::max(1, points_per_segment - 1);
+                    double cx = seg.x1 + t_length * (seg.x2 - seg.x1);
+                    double cy = seg.y1 + t_length * (seg.y2 - seg.y1);
+
+                    // Calculate perpendicular direction
+                    double dx = seg.x2 - seg.x1;
+                    double dy = seg.y2 - seg.y1;
+                    double length = std::hypot(dx, dy);
+                    if (length < 1e-6) continue;
+
+                    double perp_x = -dy / length;
+                    double perp_y = dx / length;
+
+                    // Sample only edges (not center) for faster processing
+                    for (int j = 0; j < width_samples; ++j) {
+                        double t_width = (j == 0 ? -0.5 : 0.5) * seg.width;
+                        obstacles.push_back({cx + perp_x * t_width, cy + perp_y * t_width});
+                        wall_points_added++;
+                    }
+                }
             }
         }
 
         auto obstacle_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - obstacle_start).count();
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
-            "Obstacles: %zu raw scan → %zu clusters → %zu boxes → %zu box edges + %zu raw filtered = %zu total | Time: %.1fms",
-            raw_obstacles.size(), clusters.size(), obstacle_boxes.size(),
-            obstacle_boxes.size() * 32, raw_added, obstacles.size(), obstacle_time * 1000.0);
+            "Obstacles: %zu raw scan → filtered %zu → %zu clusters → "
+            "%zu obstacles (red) + %zu wall segments (blue) → "
+            "%zu box edges + %zu wall points = %zu total | Time: %.1fms",
+            raw_obstacles.size(), filtered_obstacles.size(), clusters.size(),
+            obstacle_boxes.size(), wall_segments.size(),
+            obstacle_boxes.size() * 32, wall_points_added, obstacles.size(), obstacle_time * 1000.0);
 
         // CRITICAL DEBUG: Log obstacle details with positions
         if (!obstacles.empty()) {
@@ -950,6 +1272,17 @@ private:
             for(size_t i = start_idx; i < end_idx; ++i) {
                 best_seg.push_back(ref_wps_[i]);
             }
+        }
+
+        // Apply path smoothing if enabled
+        if (best_frenet) {
+            f1tenth::FrenetTraj smoothed_frenet = smoothPath(*best_frenet);
+
+            // Update previous path for next iteration
+            previous_frenet_path_ = smoothed_frenet;
+
+            // Use smoothed path for visualization and tracking
+            best_frenet = smoothed_frenet;
         }
 
         // Visualize Frenet path if enabled
@@ -1034,17 +1367,20 @@ private:
         }
         // onTimer()
 
-        // Publish
+        // Store planned path for periodic publishing
         if(!best_seg.empty()){
             nav_msgs::msg::Path p = f1tenth::waypointsToPathMsg(best_seg, out.header.frame_id);
             p.header.stamp = now();
-            pub_path_->publish(p);
+
+            // Update stored path with new computation
+            latest_planned_path_ = p;
+            has_planned_path_ = true;
 
             // Calculate total planning time
             auto total_time = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
 
             RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
-                "Published planned_path with %zu waypoints | Total planning time: %.3fms "
+                "Computed planned_path with %zu waypoints | Total planning time: %.3fms "
                 "(actual computation: %.3fms vs expected: %.3fms)",
                 p.poses.size(), total_time * 1000.0,
                 total_time * 1000.0, expected_computation_time * 1000.0);
@@ -1060,7 +1396,23 @@ private:
             }
         } else {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                "No path to publish (best_seg is empty)");
+                "No path computed (best_seg is empty)");
+        }
+    }
+
+    void publishPlannedPath()
+    {
+        if (has_planned_path_) {
+            // Update timestamp and publish
+            latest_planned_path_.header.stamp = now();
+            for (auto& pose : latest_planned_path_.poses) {
+                pose.header.stamp = latest_planned_path_.header.stamp;
+            }
+            pub_path_->publish(latest_planned_path_);
+
+            RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
+                "Published planned_path via timer (20 Hz) with %zu waypoints",
+                latest_planned_path_.poses.size());
         }
     }
 
@@ -1133,6 +1485,61 @@ private:
         t = std::max(0.0, std::min(1.0, t));  // Clamp to [0, 1]
 
         return v_lower + t * (v_upper - v_lower);
+    }
+
+    // Smooth blend between previous and new frenet path
+    f1tenth::FrenetTraj smoothPath(const f1tenth::FrenetTraj& new_path)
+    {
+        // If smoothing disabled or no previous path, return new path as-is
+        if (!enable_path_smoothing_ || !previous_frenet_path_) {
+            return new_path;
+        }
+
+        const auto& prev = *previous_frenet_path_;
+        f1tenth::FrenetTraj smoothed = new_path;
+
+        // Blend trajectories: smoothed = alpha * new + (1 - alpha) * prev
+        // Only blend if paths have similar length
+        size_t min_size = std::min(new_path.x.size(), prev.x.size());
+
+        if (min_size == 0) {
+            return new_path;
+        }
+
+        // Blend up to minimum size
+        for (size_t i = 0; i < min_size; ++i) {
+            smoothed.x[i] = path_smoothing_alpha_ * new_path.x[i] + (1.0 - path_smoothing_alpha_) * prev.x[i];
+            smoothed.y[i] = path_smoothing_alpha_ * new_path.y[i] + (1.0 - path_smoothing_alpha_) * prev.y[i];
+
+            // Blend angles carefully (handle wrap-around)
+            double new_yaw = new_path.yaw[i];
+            double prev_yaw = prev.yaw[i];
+            double yaw_diff = new_yaw - prev_yaw;
+
+            // Normalize angle difference to [-pi, pi]
+            while (yaw_diff > M_PI) yaw_diff -= 2.0 * M_PI;
+            while (yaw_diff < -M_PI) yaw_diff += 2.0 * M_PI;
+
+            smoothed.yaw[i] = prev_yaw + path_smoothing_alpha_ * yaw_diff;
+
+            // Blend s, d coordinates
+            if (i < new_path.s.size() && i < prev.s.size()) {
+                smoothed.s[i] = path_smoothing_alpha_ * new_path.s[i] + (1.0 - path_smoothing_alpha_) * prev.s[i];
+            }
+            if (i < new_path.d.size() && i < prev.d.size()) {
+                smoothed.d[i] = path_smoothing_alpha_ * new_path.d[i] + (1.0 - path_smoothing_alpha_) * prev.d[i];
+            }
+
+            // Blend velocity
+            if (i < new_path.v.size() && i < prev.v.size()) {
+                smoothed.v[i] = path_smoothing_alpha_ * new_path.v[i] + (1.0 - path_smoothing_alpha_) * prev.v[i];
+            }
+        }
+
+        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
+            "Path smoothing: alpha=%.2f, blended %zu points", path_smoothing_alpha_, min_size);
+
+        return smoothed;
     }
 
     void visualizeFrenetPath(const f1tenth::FrenetTraj& path)
@@ -1365,6 +1772,7 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_velocity_markers_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_frenet_velocity_markers_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_obstacle_markers_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_wall_markers_;
 
 
     nav_msgs::msg::Path ref_path_;
@@ -1373,6 +1781,11 @@ private:
     sensor_msgs::msg::LaserScan latest_scan_;
     bool odom_received_;
     bool have_scan_;
+
+    // Path smoothing
+    std::optional<f1tenth::FrenetTraj> previous_frenet_path_;
+    bool enable_path_smoothing_;
+    double path_smoothing_alpha_;
 
 
     std::unique_ptr<f1tenth::FrenetPlanner> frenet_;
@@ -1383,6 +1796,11 @@ private:
     std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
 
     rclcpp::TimerBase::SharedPtr global_path_timer_;
+    rclcpp::TimerBase::SharedPtr planned_path_timer_;
+
+    // Store latest planned path for periodic publishing
+    nav_msgs::msg::Path latest_planned_path_;
+    bool has_planned_path_ = false;
 };
 
 

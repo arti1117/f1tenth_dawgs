@@ -207,3 +207,62 @@ ros2 node info /path_planner_node
 - Repository: f1tenth_dawgs
 - Label: visualization, rviz
 - 포함 정보: RViz 스크린샷, `ros2 topic list` 출력
+
+--- wall marker
+● ✅ Wall Detection 수정 완료
+
+  빌드가 성공적으로 완료되었습니다! (소요 시간: 3분 11초, 에러 없음)
+
+  수정 내용 요약
+
+  1. Wall 모델링 방식 변경 (path_planner_node.cpp:432-493)
+
+  - 이전: Wall을 하나의 큰 박스로 모델링
+  - 변경: Wall을 짧은 선분(기본 0.5m)으로 분해
+  - 함수: breakWallIntoSegments() - cluster를 선분들로 변환
+
+  2. Global Path 필터링 추가 (path_planner_node.cpp:495-530)
+
+  - 문제: 경로 자체가 LiDAR로 감지되어 wall로 오인식됨
+  - 해결: Global path 근처 1.5m 이내의 scan point 필터링
+  - 함수: filterScanPointsNearPath() - path 근처 점들 제거
+
+  3. Wall 시각화 개선 (path_planner_node.cpp:532-616)
+
+  - 이전: 큰 박스로 표시 (RViz에서 파란색)
+  - 변경: 선분으로 표시 - 각 선분의 방향과 길이 시각화
+  - 함수: visualizeWallSegments() - 선분 기반 마커 생성
+
+  4. Obstacle Point 생성 최적화 (path_planner_node.cpp:1114-1142)
+
+  - Wall 선분을 점들로 샘플링:
+    - 길이 방향: 5개 포인트
+    - 폭 방향: 3개 포인트 (30cm 폭)
+  - Frenet planner가 정확한 wall 위치 인식 가능
+
+  5. Config 파라미터 추가 (config/planner_params.yaml:49-52)
+
+  # Wall detection parameters
+  wall_segment_length: 0.5      # Wall을 0.5m 선분으로 분해
+  wall_segment_width: 0.3       # 선분 폭 30cm
+  path_clearance_radius: 1.5    # 경로 근처 1.5m는 obstacle 제외
+
+  처리 흐름
+
+  1. Scan 수신 → LiDAR 점들 획득
+  2. Path 필터링 → Global path 1.5m 근처 점 제거 (경로 오인식 방지)
+  3. Clustering → 남은 점들을 클러스터링
+  4. 분류:
+    - 작은 cluster (< 0.8m) → Obstacle box (빨간색)
+    - 큰 cluster (≥ 0.8m) → Wall 선분들 (파란색)
+  5. Frenet Planner 전달 → 선분 샘플링 점들 + obstacle 박스 점들
+
+  이점
+
+  - ✅ 경로가 더 이상 wall로 인식되지 않음
+  - ✅ Wall을 정확한 선형 구조로 모델링 (박스보다 정교)
+  - ✅ Frenet planner가 wall 위치를 더 정확히 인식
+  - ✅ RViz에서 wall이 선분으로 표시되어 디버깅 용이
+
+  테스트를 위해 source install/setup.bash 후 시스템을 실행해 보세요! RViz에서
+  /wall_markers 토픽을 확인하면 파란색 선분들로 wall이 표시됩니다.

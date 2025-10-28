@@ -6,14 +6,18 @@ path_planner_node:
     # Pre-conditions
     #   - check base_system(f1tenth) map
     #   - run speedopt or global_planner_offline
-    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1027/mohyun_slam_ekf_iqp.csv"
+    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1028/mohyun_slam_ekf_iqp.csv"
     # "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_lippboyd_speedopted.csv"
 
 
     # Planner settings
     use_lattice: false              # DISABLED: Lattice causes planned_path to diverge from frenet_path
     use_frenet: true
-    planner_horizon: 3.0
+    planner_horizon: 5.0
+
+    # Path smooting
+    enable_path_smooting: true
+    path_smoothing_alpha: 0.4
 
     # Frenet trajectory generation settings
     frenet_time_horizon: 3.0      # Maximum time horizon for trajectory [s]
@@ -38,9 +42,19 @@ path_planner_node:
     frenet_k_velocity: 1.0   # Velocity error weight
 
     # Obstacle detection parameters
-    obstacle_cluster_distance: 0.5      # Clustering distance for grouping scan points [m]
-    obstacle_max_box_size: 0.8          # Only for obstacles
-    obstacle_box_safety_margin: 0.3     # Safety margin around detected obstacles [m]
+    obstacle_cluster_distance: 0.4      # Clustering distance for grouping scan points [m]
+    obstacle_max_box_size: 0.8          # Max size for obstacle boxes; larger clusters = walls [m]
+    obstacle_box_safety_margin: 0.2     # Safety margin around detected obstacles [m]
+
+    # Wall detection parameters (walls modeled as line segments instead of boxes)
+    wall_segment_length: 0.5            # Break walls into 0.5m segments [m]
+    wall_segment_width: 0.3             # Width of wall segment boxes [m]
+    path_clearance_radius: 0.6          # Filter scan points within 1.5m of global path [m]
+
+    # Performance optimization parameters
+    scan_downsample_factor: 3           # Use every 3rd scan point (3x faster, 1/3 points)
+    wall_sampling_distance: 0.15        # Min distance between wall segment samples [m]
+    enable_wall_detection: true         # Toggle wall detection on/off for debugging
 
     # Safety parameters
     # BALANCED: Moderate avoidance distance to prevent collisions without excessive detours
@@ -61,14 +75,14 @@ path_planner_node:
     publish_rate: 1.0  # Hz for global path publishing
 
     # Debug log level (0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=VERBOSE)
-    log_level: 4  # DEBUG level for detailed obstacle avoidance debugging
+    log_level: 1  # DEBUG level for detailed obstacle avoidance debugging
 
     # Position compensation settings
     expected_computation_time: 0.01  # Expected computation time in seconds (10ms default)
     adaptive_compensation: true  # Enable adaptive computation time estimation
 
     # Simulation mode parameter
-    sim_mode: true             # Enable simulation mode
+    sim_mode: false             # Enable simulation mode
     sim_odom: "/ego_racecar/odom"
 
     # Topics
