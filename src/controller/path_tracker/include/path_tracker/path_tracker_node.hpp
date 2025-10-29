@@ -104,7 +104,7 @@ private:
     DEFAULT,           // Use default_speed
     PATH_VELOCITY,     // Use velocity from path points
     CURVATURE_BASED,   // Calculate from curvature
-    OPTIMIZE           // Use minimum of path_velocity, curvature, and steering_limit
+    OPTIMIZE           // Use minimum or weighted combination of path_velocity and curvature
   };
   SpeedMode speed_mode_;
 
@@ -112,6 +112,11 @@ private:
   double friction_coeff_;     // friction coefficient (mu)
   double max_speed_limit_;    // maximum speed limit
   double min_speed_limit_;    // minimum speed limit
+
+  // Optimize mode parameters (weighted combination)
+  bool optimize_use_weighted_;   // Use weighted combination instead of min()
+  double optimize_path_weight_;  // Weight for path velocity
+  double optimize_curv_weight_;  // Weight for curvature speed
 
   // Position compensation parameters
   bool use_position_compensation_;    // Enable position compensation based on velocity and latency

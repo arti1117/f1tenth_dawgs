@@ -5,19 +5,20 @@ path_tracker_node:
     # ============================================================================
     # Pure pursuit finds a "lookahead point" ahead on the path and steers towards it
 
-    lookahead_base: 0.5         # Base lookahead distance [m]
+    lookahead_base: 0.4         # Base lookahead distance [m]
                                  # EFFECT: Larger = smoother but slower response, cuts corners more
                                  #         Smaller = sharper turns but oscillation risk
                                  # TYPICAL: 0.3-1.0m for F1TENTH scale
 
-    lookahead_k: 0.2            # Speed-dependent lookahead gain
+    use_speed_lookahead: true   # Enable speed-dependent lookahead
+                                 # EFFECT: If false, uses constant lookahead_base
+                                 #         If true, adapts lookahead based on speed
+
+    lookahead_k: 0.5            # Speed-dependent lookahead gain
                                  # EFFECT: L = lookahead_base + lookahead_k * speed
                                  #         Increases lookahead at higher speeds for stability
                                  # TYPICAL: 0.2-0.5
 
-    use_speed_lookahead: true   # Enable speed-dependent lookahead
-                                 # EFFECT: If false, uses constant lookahead_base
-                                 #         If true, adapts lookahead based on speed
 
     # ============================================================================
     # ADAPTIVE LOOKAHEAD PARAMETERS
@@ -27,7 +28,7 @@ path_tracker_node:
     use_adaptive_lookahead: false   # Enable curvature and error-based lookahead adjustment
                                    # EFFECT: Dynamically adjusts lookahead for tight turns and corrections
 
-    lookahead_min: 0.3           # Minimum lookahead distance [m]
+    lookahead_min: 0.3            # Minimum lookahead distance [m]
                                   # EFFECT: Lower bound to prevent too aggressive steering
                                   # CAUTION: Too small causes oscillation
 
@@ -35,12 +36,12 @@ path_tracker_node:
                                   # EFFECT: Upper bound to prevent looking too far ahead
                                   # CAUTION: Too large causes corner cutting
 
-    k_curvature: 0.0             # Curvature-based lookahead gain (L += k_curv / |kappa|)
+    k_curvature: 0.8             # Curvature-based lookahead gain (L += k_curv / |kappa|)
                                   # EFFECT: Increases lookahead in straight sections, reduces in curves
                                   #         Higher value = more adaptation to curvature
                                   # TYPICAL: 0.3-1.0
 
-    k_error: 0.7                 # Lateral error-based lookahead gain (L -= k_e * |e_y|)
+    k_error: 0.3                 # Lateral error-based lookahead gain (L -= k_e * |e_y|)
                                   # EFFECT: Reduces lookahead when far from path for quicker correction
                                   #         Higher value = more aggressive error correction
                                   # TYPICAL: 0.2-0.8
@@ -54,12 +55,12 @@ path_tracker_node:
     # Stanley adds heading error and cross-track error correction to Pure Pursuit
     # Helps prevent "cutting corners" by adding a correction term
 
-    use_stanley: true            # Enable Stanley term addition to Pure Pursuit
+    use_stanley: false            # Enable Stanley term addition to Pure Pursuit
                                   # EFFECT: Adds lateral error feedback to steering
                                   #         Improves path following accuracy
                                   # RESULT: Combined steering = Pure Pursuit + Stanley
 
-    stanley_k: 0.9               # Stanley gain for lateral error correction
+    stanley_k: 0.3               # Stanley gain for lateral error correction
                                   # EFFECT: Higher = stronger correction when off-path
                                   #         δ_stanley = atan(k * lateral_error / velocity)
                                   # CAUTION: Too high causes oscillation
@@ -70,7 +71,7 @@ path_tracker_node:
     # ============================================================================
     # Low-pass filter to smooth steering commands and prevent jerky motion
 
-    use_steering_filter: true    # Enable low-pass filter on steering commands
+    use_steering_filter: false    # Enable low-pass filter on steering commands
                                   # EFFECT: Smooths rapid steering changes
                                   # BENEFIT: Reduces mechanical wear, improves stability
 
@@ -96,7 +97,7 @@ path_tracker_node:
                                   #   - Path following with tight heading tolerances
                                   # CAUTION: May cause oscillation if combined with high Stanley gain
 
-    k_heading: 1.0               # Heading error gain
+    k_heading: 0.8               # Heading error gain
                                   # EFFECT: Controls strength of heading alignment
                                   #         Higher = more aggressive heading correction
                                   #         Lower = gentler heading alignment
@@ -112,7 +113,7 @@ path_tracker_node:
     # Sequential path following that searches only ahead of last target point
     # Prevents "sticking" to same target when odometry updates slowly
 
-    use_forward_tracking: false  # Enable sequential path following
+    use_forward_tracking: true  # Enable sequential path following
                                   # PROBLEM: Low odom frequency (< 20Hz) may cause controller
                                   #          to target the same path point repeatedly
                                   # SOLUTION: Search only forward indices from last target point
@@ -175,7 +176,7 @@ path_tracker_node:
                                 # EFFECT: If true, applies velocity_gain to limit speed
                                 # USE: Set false for racing, true for tuning
 
-    velocity_gain: 0.5          # Speed multiplier in debug mode (0.0-1.0)
+    velocity_gain: 0.3          # Speed multiplier in debug mode (0.0-1.0)
                                  # EFFECT: actual_speed = target_speed * velocity_gain
                                  # EXAMPLE: 0.3 = 30% speed for safe tuning
                                  # NOTE: Only applies when debug_mode = true
@@ -188,7 +189,7 @@ path_tracker_node:
     # SIMULATION MODE PARAMETERS
     # ============================================================================
 
-    sim_mode: true             # Enable simulation mode
+    sim_mode: false             # Enable simulation mode
                                 # EFFECT: Uses sim_odom topic instead of odom_topic
                                 # NOTE: May invert steering for sim compatibility (check code)
 
@@ -228,13 +229,37 @@ path_tracker_node:
                                  # TYPICAL: 0.8-1.0 for good track surface
                                  # CAUTION: Lower if slippery (0.5-0.7)
 
-    max_speed_limit: 8.0        # Maximum speed limit [m/s]
+    max_speed_limit: 9.0        # Maximum speed limit [m/s]
                                  # EFFECT: Hard cap on calculated speed
                                  # SAFETY: Prevents unrealistic speeds in straight sections
 
     min_speed_limit: 0.5        # Minimum speed limit [m/s]
                                  # EFFECT: Lower bound on calculated speed
                                  # SAFETY: Prevents stopping in tight turns
+
+    # ============================================================================
+    # OPTIMIZE MODE PARAMETERS
+    # ============================================================================
+    # Used when speed_mode = "optimize"
+
+    optimize_use_weighted: true    # Use weighted combination instead of min()
+                                     # EFFECT: If false, uses min(path_velocity, curvature)
+                                     #         If true, uses weighted average
+                                     # BENEFIT: Smoother speed profile with tunable balance
+
+    optimize_path_weight: 0.1        # Weight for path_velocity [0.0-1.0]
+                                     # EFFECT: Higher = trust path velocity more
+                                     # FORMULA: speed = w_path * v_path + w_curv * v_curv
+                                     # TUNING:
+                                     #   - 0.7-0.8: Prioritize pre-optimized path
+                                     #   - 0.5: Equal balance
+                                     #   - 0.2-0.3: Prioritize geometric safety
+
+    optimize_curv_weight: 0.9        # Weight for curvature speed [0.0-1.0]
+                                     # EFFECT: Higher = trust curvature-based speed more
+                                     # NOTE: Weights are automatically normalized to sum to 1.0
+                                     # EXAMPLE: path_weight=0.7, curv_weight=0.3
+                                     #          → 70% path velocity + 30% curvature speed
 
     # ============================================================================
     # ACCELERATION LIMITING (FRICTION CIRCLE)

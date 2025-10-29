@@ -48,7 +48,7 @@ def generate_launch_description():
 
     # Map file configuration
     yaml_file = LaunchConfiguration('yaml_file',
-        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1028/mohyun_slam_ekf.yaml'),
+        default='/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1029/mohyun_slam_ekf.yaml'),
 
     return LaunchDescription([
         DeclareLaunchArgument(
