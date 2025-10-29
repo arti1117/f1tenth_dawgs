@@ -50,10 +50,15 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     this->declare_parameter<std::string>("sim_odom", "/ego_racecar/odom");
 
     // Speed mode parameters
-    this->declare_parameter<std::string>("speed_mode", "default");  // "default", "path_velocity", "curvature"
+    this->declare_parameter<std::string>("speed_mode", "default");  // "default", "path_velocity", "curvature", "optimize"
     this->declare_parameter<double>("friction_coeff", 0.9);
     this->declare_parameter<double>("max_speed_limit", 8.0);
     this->declare_parameter<double>("min_speed_limit", 0.5);
+
+    // Optimize mode parameters
+    this->declare_parameter<bool>("optimize_use_weighted", false);
+    this->declare_parameter<double>("optimize_path_weight", 0.5);
+    this->declare_parameter<double>("optimize_curv_weight", 0.5);
 
     // Position compensation parameters
     this->declare_parameter<bool>("use_position_compensation", true);
@@ -125,6 +130,11 @@ PathTrackerNode::PathTrackerNode() : Node("path_tracker"), path_received_(false)
     friction_coeff_ = this->get_parameter("friction_coeff").as_double();
     max_speed_limit_ = this->get_parameter("max_speed_limit").as_double();
     min_speed_limit_ = this->get_parameter("min_speed_limit").as_double();
+
+    // Optimize mode parameters
+    optimize_use_weighted_ = this->get_parameter("optimize_use_weighted").as_bool();
+    optimize_path_weight_ = this->get_parameter("optimize_path_weight").as_double();
+    optimize_curv_weight_ = this->get_parameter("optimize_curv_weight").as_double();
 
     // Position compensation parameters
     use_position_compensation_ = this->get_parameter("use_position_compensation").as_bool();
@@ -818,7 +828,7 @@ double PathTrackerNode::computeSpeed(const LookaheadResult& lookahead, double cu
             break;
 
         case SpeedMode::OPTIMIZE: {
-            // Calculate all three speed limits
+            // Calculate all speed components
             double path_speed;
             if (lookahead.v > 0.01) {
                 path_speed = lookahead.v;
@@ -828,13 +838,36 @@ double PathTrackerNode::computeSpeed(const LookaheadResult& lookahead, double cu
 
             double curv_speed = computeCurvatureSpeed(lookahead.idx);
 
-            // Note: steering limit is applied separately in odomCallback after computeSpeed
-            // Here we just use the minimum of path and curvature speeds
-            speed = std::min(path_speed, curv_speed);
+            // Choose between min() and weighted combination
+            if (optimize_use_weighted_) {
+                // Weighted combination approach
+                // Normalize weights to sum to 1.0
+                double weight_sum = optimize_path_weight_ + optimize_curv_weight_;
+                if (weight_sum < 1e-6) {
+                    // Safety: if both weights are zero, use equal weights
+                    weight_sum = 1.0;
+                    optimize_path_weight_ = 0.5;
+                    optimize_curv_weight_ = 0.5;
+                    RCLCPP_WARN_ONCE(this->get_logger(),
+                        "Both optimize weights are zero, using equal weights (0.5, 0.5)");
+                }
 
-            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                "OPTIMIZE: path=%.2f, curv=%.2f → using %.2f m/s (steering limit applied separately)",
-                path_speed, curv_speed, speed);
+                double norm_path_weight = optimize_path_weight_ / weight_sum;
+                double norm_curv_weight = optimize_curv_weight_ / weight_sum;
+
+                speed = norm_path_weight * path_speed + norm_curv_weight * curv_speed;
+
+                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "OPTIMIZE [WEIGHTED]: path=%.2f (w=%.2f), curv=%.2f (w=%.2f) → %.2f m/s",
+                    path_speed, norm_path_weight, curv_speed, norm_curv_weight, speed);
+            } else {
+                // Original min() approach
+                speed = std::min(path_speed, curv_speed);
+
+                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "OPTIMIZE [MIN]: path=%.2f, curv=%.2f → %.2f m/s",
+                    path_speed, curv_speed, speed);
+            }
             break;
         }
 

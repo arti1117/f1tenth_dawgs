@@ -953,3 +953,52 @@ ros2 param list /path_planner_node
   - warning_cost: 너무 낮으면 (<2.0) 회피 부족, 너무 높으면 (>15.0) 과도한 회피
 
   기존 frenet_k_proximity와 frenet_proximity_threshold 파라미터는 제거되었습니다.
+--- planner tuning
+● 트랙 중앙의 50cm 장애물을 인식하지 못하는 문제의 원인을 찾았습니다.
+  주요 문제는 path filtering입니다.
+
+  문제 분석
+
+  현재 설정에서 장애물이 필터링되는 과정:
+
+  1. Path Clearance Filtering (가장 큰 문제)
+    - path_clearance_radius: 0.6m (planner_params.yaml:52)
+    - enable_path_filtering: true (planner_params.yaml:64)
+    - 결과: 글로벌 centerline 경로 주변 0.6m 이내의 모든 스캔 포인트가 제거됨
+    - 트랙 중앙의 장애물은 centerline 근처에 있어 필터링될 가능성이 매우
+   높음
+  2. Aggressive Scan Downsampling
+    - scan_downsample_factor: 7 (planner_params.yaml:56)
+    - 7개 포인트 중 1개만 사용 → 50cm 장애물의 포인트 수가 크게 감소
+  3. Clustering 최소 요구사항
+    - 클러스터가 최소 3개 포인트 필요 (path_planner_node.cpp:332)
+    - Downsampling + filtering 후 3개 미만이면 무시됨
+
+  권장 수정사항
+
+  src/controller/path_planner/config/planner_params.yaml에서 다음
+  파라미터를 수정하세요:
+
+  옵션 1: Path Filtering 비활성화 (가장 확실)
+
+  enable_path_filtering: false  # 64번 라인
+
+  옵션 2: Path Clearance Radius 대폭 감소
+
+  path_clearance_radius: 0.2  # 52번 라인 (0.6 → 0.2)
+
+  옵션 3: Scan Downsampling 개선
+
+  scan_downsample_factor: 3  # 56번 라인 (7 → 3)
+
+  옵션 4: 종합 솔루션 (권장)
+
+  # 52번 라인
+  path_clearance_radius: 0.3  # 0.6 → 0.3 (centerline 바로 근처만 필터링)
+
+  # 56번 라인
+  scan_downsample_factor: 4  # 7 → 4 (더 많은 포인트 사용)
+
+  # 45번 라인
+  obstacle_cluster_distance: 0.2  # 0.15 → 0.2 (더 쉽게 클러스터링)
+

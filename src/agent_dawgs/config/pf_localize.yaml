@@ -5,15 +5,15 @@ particle_filter:
     odometry_topic: 'odom'  # Will be remapped to /odometry/filtered in launch file
     # Note: Use 'odom' without '/' to allow remapping to work properly
     # range data downsampling
-    angle_step: 18
-    max_particles: 4000
+    angle_step: 21
+    max_particles: 2500
     squash_factor: 2.2
     # visualization
     viz: 1
-    max_viz_particles: 60
+    max_viz_particles: 10
     # ray marching method
     range_method: 'rmgpu'
-    theta_discretization: 112
+    theta_discretization: 120
     # range data filtering
     max_range: 10
     fine_timing: 0

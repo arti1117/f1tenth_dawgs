@@ -611,3 +611,237 @@ Test the changes and adjust further based on observed behavior.
   3. Steering 변화율: 조향각이 급격하게 변하는지 /drive 토픽 모니터링
 
   수정 후에도 문제가 지속되면 말씀해주세요!
+
+--- speed tuning guide
+● path_tracker 패키지의 speed_mode에 대한 각 모드의 동작 방식과 제약사항을
+  설명드리겠습니다.
+
+  Speed Mode 종류 및 동작 방식
+
+  1. "default" 모드
+
+  동작 방식:
+  - 고정된 default_speed 값을 사용합니다
+  - 경로의 기하학적 정보나 차량 상태를 고려하지 않습니다
+
+  제약사항:
+  - ✅ 가장 단순하고 예측 가능한 동작
+  - ⚠️ 경로 정보를 무시하므로 곡선 구간에서 과속 위험
+  - ⚠️ 직선 구간에서도 느린 속도 유지로 비효율적
+  - 📍 적용 위치: path_tracker_node.cpp:844
+
+  ---
+  2. "path_velocity" 모드
+
+  동작 방식:
+  1. 1차 우선순위: lookahead.v (frenet_path에 내장된 속도) 사용
+    - pose.position.z > 0.01인 경우 해당 값 사용
+  2. Fallback: global_centerline의 속도 프로파일 사용
+    - lookahead 포인트와 가장 가까운 global path 지점의 속도 참조
+
+  제약사항:
+  - ✅ 사전 최적화된 속도 프로파일 활용 (시간 최적화 경로에 최적)
+  - ⚠️ global_path_topic 구독 필요 (/global_centerline)
+  - ⚠️ global path가 없으면 default_speed로 fallback
+  - ⚠️ path_planner가 속도 정보를 제공하지 않으면 부정확할 수 있음
+  - 📍 적용 위치: path_tracker_node.cpp:793-812
+
+  코드 흐름:
+  if (lookahead.v > 0.01) {
+      speed = lookahead.v;  // frenet path 속도 사용
+  } else {
+      speed = getGlobalPathSpeed(lookahead.x, lookahead.y);  // global 
+  path에서 검색
+  }
+
+  ---
+  3. "curvature" 모드
+
+  동작 방식:
+  - 경로의 곡률(curvature)을 기반으로 최대 안전 속도를 계산
+  - 물리 공식: v_max = sqrt(μ * g / |κ|)
+    - μ (friction_coeff): 마찰 계수 (기본 0.9)
+    - g: 중력 가속도 (9.81 m/s²)
+    - κ (kappa): 경로 곡률
+
+  제약사항:
+  - ✅ 경로 기하학에 자동 적응 (곡선에서 감속, 직선에서 가속)
+  - ✅ 물리적으로 안전한 속도 계산
+  - ⚠️ 곡률이 매우 작으면 (|κ| < 1e-6) max_speed_limit 사용
+  - ⚠️ friction_coeff 값이 부정확하면 과속/저속 문제 발생
+  - ⚠️ 3-point finite difference로 곡률 계산 → 최소 3개 waypoint 필요
+  - 📍 적용 위치: path_tracker_node.cpp:815-818, 896-926
+
+  곡률 계산 방식 (path_tracker_node.cpp:928-952):
+  // 3점(p1, p2, p3)을 사용한 곡률 계산
+  κ = 2 * |cross(v1, v2)| / |v1|³
+
+  ---
+  4. "optimize" 모드
+
+  동작 방식:
+  - 3가지 속도의 최소값(min) 선택:
+    a. Path velocity (frenet path 또는 global path)
+    b. Curvature-based speed
+    c. (Steering limit은 나중에 별도 적용)
+
+  제약사항:
+  - ✅ 가장 보수적이고 안전한 모드
+  - ✅ 모든 제약 조건 동시 고려
+  - ⚠️ global_path_topic 구독 필요
+  - ⚠️ 가장 느린 속도로 동작할 수 있음 (안전 vs 성능 trade-off)
+  - ⚠️ Path velocity와 curvature 모드의 모든 제약사항 상속
+  - 📍 적용 위치: path_tracker_node.cpp:820-838
+
+  선택 로직:
+  speed = min(path_velocity, curvature_speed);
+  // Steering limit는 applyAccelerationLimit에서 별도 적용
+
+  ---
+  공통 제약사항 (모든 모드)
+
+  속도 제한
+
+  1. 속도 클램핑 (path_tracker_node.cpp:849):
+  speed = clamp(speed, min_speed_limit, max_speed_limit)
+    - min_speed_limit: 0.5 m/s (기본값)
+    - max_speed_limit: 8.0 m/s (기본값)
+  2. Debug 모드 적용 (path_tracker_node.cpp:852-865):
+  if (debug_mode) {
+      speed *= velocity_gain;  // 기본 0.3 (30% 속도)
+      speed = max(speed, debug_min_speed);  // 최소 0.6 m/s
+  }
+  3. Friction Circle 제약 (use_acceleration_limit=true):
+    - 횡방향 가속도를 고려한 종방향 가속도 제한
+    - a_total² = a_lateral² + a_longitudinal²
+    - 📍 path_tracker_node.cpp:562-575, 1164-1194
+
+  ---
+  모드별 추천 시나리오
+
+  | 모드            | 추천 시나리오             | 주의사항                 |
+  |---------------|---------------------|----------------------|
+  | default       | 테스트, 간단한 경로 추종      | 안전 속도로 설정 필수
+        |
+  | path_velocity | 시간 최적화된 레이싱         | Global path 필수       |
+  | curvature     | 실시간 적응형 주행, SLAM 기반 | friction_coeff 튜닝 필요
+   |
+  | optimize      | 최대 안전성 요구 환경        | 느릴 수 있음
+   |
+
+  ---
+  현재 설정 확인
+
+  현재 tracker_params.yaml:202에서 "curvature" 모드로 설정되어 있으며:
+  - friction_coeff: 0.9
+  - max_speed_limit: 8.0 m/s
+  - min_speed_limit: 0.5 m/s
+  - debug_mode: true (velocity_gain: 0.3 → 실제 속도는 계산값의 30%)
+
+  각 모드에 대해 더 자세한 설명이나 특정 상황에서의 튜닝 가이드가 필요하시면
+   말씀해 주세요!
+
+--- weighted optimize mode
+● 완료되었습니다! ✅ optimize 모드에 가중치 기반 계산 기능을 추가했습니다.
+
+  변경사항 요약
+
+  1. 파라미터 추가 (tracker_params.yaml:240-262)
+
+  # OPTIMIZE MODE PARAMETERS
+  optimize_use_weighted: false    # true = 가중치 사용, false = min() 사용
+  optimize_path_weight: 0.5        # path_velocity 가중치 (0.0~1.0)
+  optimize_curv_weight: 0.5        # curvature 가중치 (0.0~1.0)
+
+  2. 계산 로직 (path_tracker_node.cpp:830-872)
+
+  기존 방식 (optimize_use_weighted: false)
+
+  speed = min(path_velocity, curvature_speed)
+
+  새로운 가중치 방식 (optimize_use_weighted: true)
+
+  // 가중치 자동 정규화 (합이 1.0이 되도록)
+  norm_path_weight = path_weight / (path_weight + curv_weight)
+  norm_curv_weight = curv_weight / (path_weight + curv_weight)
+
+  speed = norm_path_weight × path_velocity + norm_curv_weight ×
+  curvature_speed
+
+  사용 방법
+
+  1. 가중치 모드 활성화
+
+  tracker_params.yaml 수정:
+  speed_mode: "optimize"
+  optimize_use_weighted: true
+  optimize_path_weight: 0.7   # 경로 속도 70%
+  optimize_curv_weight: 0.3   # 곡률 속도 30%
+
+  2. 빌드 및 실행
+
+  source install/setup.bash
+  ros2 launch path_tracker path_tracker.launch.py
+
+  3. 튜닝 가이드
+
+  | 시나리오    | path_weight | curv_weight | 효과                        |
+  |---------|-------------|-------------|---------------------------|
+  | 공격적 레이싱 | 0.8         | 0.2         | 최적화된 경로 속도 우선
+          |
+  | 균형잡힌 주행 | 0.5         | 0.5         | 경로와 기하학 동등 고려
+          |
+  | 안전 우선   | 0.3         | 0.7         | 기하학적 안전 속도 우선
+        |
+  | 매우 보수적  | 0.0         | 1.0         | 곡률만 고려 (curvature 모드와
+   동일) |
+
+  4. 디버그 로그 확인
+
+  ros2 topic echo /rosout | grep OPTIMIZE
+
+  출력 예시:
+  OPTIMIZE [WEIGHTED]: path=6.50 (w=0.70), curv=5.00 (w=0.30) → 6.15 m/s
+
+  주요 기능
+
+  ✅ 안전 기능
+
+  - 가중치 자동 정규화: 합이 1.0이 되도록 자동 조정
+  - Zero 가중치 보호: 양쪽 모두 0이면 자동으로 (0.5, 0.5) 적용
+  - 하위 호환성: optimize_use_weighted: false로 기존 min() 방식 유지
+
+  📊 장점
+
+  - 부드러운 속도 프로파일: min()의 급격한 변화 방지
+  - 튜닝 가능: 트랙/상황에 맞게 가중치 조정 가능
+  - 디버그 친화적: 각 속도 성분과 가중치를 로그로 확인
+
+  ⚠️ 주의사항
+
+  - path_velocity 모드처럼 global_path_topic 구독 필요
+  - 가중치 조합이므로 min()보다 빠른 속도가 나올 수 있음
+  - 트랙 테스트를 통해 최적 가중치 찾기 권장
+
+  예제 설정
+
+  레이싱 모드 (공격적)
+
+  speed_mode: "optimize"
+  optimize_use_weighted: true
+  optimize_path_weight: 0.8
+  optimize_curv_weight: 0.2
+  friction_coeff: 1.0
+  max_speed_limit: 9.0
+
+  안전 모드 (보수적)
+
+  speed_mode: "optimize"
+  optimize_use_weighted: true
+  optimize_path_weight: 0.3
+  optimize_curv_weight: 0.7
+  friction_coeff: 0.8
+  max_speed_limit: 7.0
+
+  변경사항이 정상적으로 빌드되었으며, 바로 사용하실 수 있습니다! 🚀
+

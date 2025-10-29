@@ -6,7 +6,7 @@ path_planner_node:
     # Pre-conditions
     #   - check base_system(f1tenth) map
     #   - run speedopt or global_planner_offline
-    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1028/mohyun_slam_ekf_iqp.csv"
+    csv_file_path: "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/mohyun_1029/mohyun_slam_ekf_iqp.csv"
     # "/home/dawgs_nx/f1tenth_dawgs/src/peripheral/maps/icheon/icheon1009_map_lippboyd_speedopted.csv"
 
 
@@ -30,24 +30,24 @@ path_planner_node:
 
     # Lateral sampling (distance from centerline in meters)
     # NARROW RANGE: Reduced to ±1.0m for tighter obstacle avoidance
-    frenet_d_samples: [-1.0, -0.55, -0.25, 0.0, 0.25, 0.65, 1.0]
+    frenet_d_samples: [-1.0, -0.6, -0.3, 0.0, 0.3, 0.6, 1.0]
 
     # Time horizon samples (in seconds)
-    frenet_t_samples: [1.5, 2.0, 2.5, 3.0]
+    frenet_t_samples: [1.0, 1.5, 2.0, 2.5]
 
     # Cost function weights
-    frenet_k_jerk: 0.1       # Jerk (smoothness) weight
+    frenet_k_jerk: 0.3       # Jerk (smoothness) weight
     frenet_k_time: 0.1       # Time weight (prefer faster trajectories)
     frenet_k_deviation: 1.5  # INCREASED: Higher centerline preference to reduce avoidance distance
     frenet_k_velocity: 1.0   # Velocity error weight
 
     # Obstacle detection parameters
-    obstacle_cluster_distance: 0.4      # Clustering distance for grouping scan points [m]
+    obstacle_cluster_distance: 0.15      # Clustering distance for grouping scan points [m]
     obstacle_max_box_size: 0.8          # Max size for obstacle boxes; larger clusters = walls [m]
     obstacle_box_safety_margin: 0.2     # Safety margin around detected obstacles [m]
 
     # Wall detection parameters (walls modeled as line segments instead of boxes)
-    wall_segment_length: 0.5            # Break walls into 0.5m segments [m]
+    wall_segment_length: 0.7            # Break walls into 0.5m segments [m]
     wall_segment_width: 0.3             # Width of wall segment boxes [m]
     path_clearance_radius: 0.6          # Filter scan points within 1.5m of global path [m]
 
@@ -61,7 +61,7 @@ path_planner_node:
 
     # Obstacle processing optimization
     enable_obstacle_clustering: true    # If false, skip obstacle box creation entirely - Saves clustering computation
-    enable_path_filtering: true         # Filter scan points near global path - Set false to skip (faster but may detect path as obstacle)
+    enable_path_filtering: false         # Filter scan points near global path - Set false to skip (faster but may detect path as obstacle)
     obstacle_points_per_side: 3         # Points sampled per box side (6=24 points, 3=12 points) - Reduce for speed
     max_obstacles_to_process: 5         # Maximum number of obstacles to process - Cap to limit computation time
 
@@ -71,7 +71,7 @@ path_planner_node:
     # These parameters dramatically reduce wall computation without losing safety.
     # =============================================================================
 
-    wall_sampling_distance: 0.6         # Min distance between wall segment samples [m]
+    wall_sampling_distance: 0.8         # Min distance between wall segment samples [m]
                                          # EFFECT: Larger = fewer wall samples = faster processing
                                          # TYPICAL: 0.4-0.8m
                                          # NOTE: Original parameter, kept for compatibility
@@ -128,7 +128,7 @@ path_planner_node:
     frenet_vehicle_radius: 0.05          # Vehicle footprint radius [m] - F1TENTH car width ~0.2m
     frenet_obstacle_radius: 0.10         # Expected obstacle radius [m]
     frenet_k_velocity_safety: 0.05       # Velocity-dependent safety gain
-    frenet_min_safety_margin: 0.25       # Minimum safety margin [m]
+    frenet_min_safety_margin: 0.00       # Minimum safety margin [m]
 
     # ============================================================================
     # TWO-ZONE COST MODEL (PREVENTS TRACK CENTER BIAS)
@@ -151,7 +151,7 @@ path_planner_node:
     # EFFECT: Vehicle can use full track width without being pulled to center
     # ============================================================================
 
-    frenet_warning_distance: 0.8         # Warning zone outer distance [m]
+    frenet_warning_distance: 0.5         # Warning zone outer distance [m]
                                          # EFFECT: Beyond this distance, obstacles have NO cost
                                          # PROBLEM SOLVED: Prevents track center bias
                                          # TUNING:
@@ -162,7 +162,7 @@ path_planner_node:
                                          #          → Warning zone width = 0.4m
                                          #          → Wall at 1.0m distance = NO COST
 
-    frenet_warning_cost: 5.0             # Cost weight in warning zone
+    frenet_warning_cost: 7.0             # Cost weight in warning zone
                                          # EFFECT: Scales the linear penalty in warning zone
                                          #         Higher = stronger avoidance within warning zone
                                          #         Lower = more relaxed avoidance
@@ -187,7 +187,7 @@ path_planner_node:
     adaptive_compensation: true  # Enable adaptive computation time estimation
 
     # Simulation mode parameter
-    sim_mode: true             # Enable simulation mode
+    sim_mode: false             # Enable simulation mode
     sim_odom: "/ego_racecar/odom"
 
     # Topics
