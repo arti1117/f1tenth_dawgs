@@ -1,51 +1,203 @@
+# =============================================================================
+# ROS2 Build System (Colcon)
+# =============================================================================
 install/
 log/
 build/
 
-# Ignore generated docs
-*.dox
-*.wikidoc
-
-# eclipse stuff
-.project
-.cproject
-
-# qcreator stuff
-CMakeLists.txt.user
-
-srv/_*.py
-*.pcd
-*.pyc
-qtcreator-*
-*.user
-
-*~
-
-# Emacs
-.#*
-
-# Colcon custom files
+# Colcon workspace files
 COLCON_IGNORE
 AMENT_IGNORE
 
+# =============================================================================
+# Temporary and Log Files
+# =============================================================================
+# Log files from ROS nodes and DDS
+*.log
+cyclonedds*.log
+
+# Backup files
+*~
+*.bak
+*.orig
+
+# Archive files (use version control instead)
+*.zip
+*.tar.gz
+*.tgz
+
+# =============================================================================
 # Python
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+*.pyo
+
+# Python build artifacts
 *.so
 .Python
 *.egg-info/
 dist/
+build/
 *.egg
 
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
 
-# IDE
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Pytest cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =============================================================================
+# ROS/ROS2 Specific
+# =============================================================================
+# Generated service/message files
+srv/_*.py
+msg/_*.py
+action/_*.py
+
+# Point cloud data
+*.pcd
+*.ply
+
+# Rosbag files (can be large)
+bag/
+*.bag
+*.bag.active
+
+# Generated parameter files
+**/cfg/cpp/
+
+# =============================================================================
+# Documentation
+# =============================================================================
+# Generated documentation
+*.dox
+*.wikidoc
+docs/_build/
+docs/html/
+docs/xml/
+site/
+
+# =============================================================================
+# IDE and Editor Files
+# =============================================================================
+# Visual Studio Code
 .vscode/
+*.code-workspace
+
+# PyCharm / IntelliJ
 .idea/
+*.iml
+
+# Eclipse
+.project
+.cproject
+.pydevproject
+.settings/
+
+# Qt Creator
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+qtcreator-*
+*.user
+*.autosave
+
+# Vim
 *.swp
 *.swo
-bag/
+*~.nib
+Session.vim
+
+# Emacs
+.#*
+\#*\#
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# =============================================================================
+# Operating System Files
+# =============================================================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# Development and Testing
+# =============================================================================
+# Test coverage reports
+coverage/
+.coverage.*
+*.cover
+
+# Benchmark results
+benchmark_results/
+*.benchmark
+
+# Profiling data
+*.prof
+*.lprof
+*.pstats
+
+# Cache directories
+.cache/
+.mypy_cache/
+.ruff_cache/
+
+# =============================================================================
+# Hardware and Sensor Data
+# =============================================================================
+# Large data files
+data/recordings/
+*.pcap
+*.raw
+
+# Calibration files (comment out if you want to track these)
+# calibration/*.yaml
+
+# Map files (comment out if you want to track these)
+# maps/*.pgm
+# maps/*.yaml
+
+# =============================================================================
+# Project Specific
+# =============================================================================
+# Serena MCP data (keep for project context)
+# .serena/
+
+# Claude Code workspace (keep for project context)
+# .claude/
