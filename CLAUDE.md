@@ -13,7 +13,7 @@ The repository is organized as follows:
 ```
 f1tenth_dawgs/
 ├── config/                     # System configurations
-│   ├── cyclonedds_jetson.xml  # DDS network configuration
+│   ├── cyclonedds_jetson.xml   # DDS network configuration
 │   └── README.md
 │
 ├── data/                       # Experimental data and calibration
@@ -33,8 +33,8 @@ f1tenth_dawgs/
 │   └── README.md               # Documentation index
 │
 ├── scripts/                    # Utility scripts
-│   ├── launch_with_dds.sh     # DDS environment setup
-│   ├── test_urg_connection.sh # LiDAR diagnostic
+│   ├── launch_with_dds.sh      # DDS environment setup
+│   ├── test_urg_connection.sh  # LiDAR diagnostic
 │   └── README.md
 │
 ├── src/                        # ROS2 packages (37 total)

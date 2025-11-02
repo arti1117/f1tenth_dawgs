@@ -25,17 +25,17 @@
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                   PERCEPTION LAYER                        │
+│                   PERCEPTION LAYER                       │
 │  LiDAR + IMU + Odometry → Localization (Particle Filter) │
 └──────────────────────────────────────────────────────────┘
                           ↓
 ┌──────────────────────────────────────────────────────────┐
-│                    PLANNING LAYER                         │
+│                    PLANNING LAYER                        │
 │  Two-Stage Frenet Planner (Lattice + LUT)                │
 └──────────────────────────────────────────────────────────┘
                           ↓
 ┌──────────────────────────────────────────────────────────┐
-│                    CONTROL LAYER                          │
+│                    CONTROL LAYER                         │
 │  Pure Pursuit → Ackermann Commands → VESC                │
 └──────────────────────────────────────────────────────────┘
 ```
